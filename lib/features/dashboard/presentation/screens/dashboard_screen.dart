@@ -3,6 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../customers/presentation/screens/new_customer_screen.dart';
 import '../../../metal_rates/presentation/screens/metal_rates_screen.dart';
 import '../../../onboarding/presentation/screens/role_selection_screen.dart';
 
@@ -30,10 +31,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (sheetContext) {
         return _AddNewSheet(
           onCustomerTap: () {
-            _showMessage('New Customer screen will be connected next.');
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const NewCustomerScreen(),
+              ),
+            );
           },
           onSupplierTap: () {
-            _showMessage('New Supplier screen will be connected next.');
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const NewCustomerScreen(isSupplier: true),
+              ),
+            );
           },
         );
       },
