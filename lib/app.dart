@@ -1,10 +1,10 @@
-
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'core/theme/app_theme.dart';
 import 'features/dashboard/presentation/screens/dashboard_screen.dart';
 import 'features/onboarding/presentation/screens/role_selection_screen.dart';
+import 'services/notification_service.dart';
 
 class JewelSetuApp extends StatelessWidget {
   const JewelSetuApp({super.key});
@@ -12,6 +12,7 @@ class JewelSetuApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: NotificationService.navigatorKey,
       title: 'JewelSetu',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,

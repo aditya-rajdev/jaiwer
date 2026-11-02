@@ -3,7 +3,9 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../services/notification_service.dart';
 import '../../../customers/presentation/screens/new_customer_screen.dart';
+import '../../../customers/presentation/screens/customers_list_screen.dart';
 import '../../../metal_rates/presentation/screens/metal_rates_screen.dart';
 import '../../../onboarding/presentation/screens/role_selection_screen.dart';
 
@@ -61,6 +63,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await storage.delete(key: 'user_id');
     await storage.delete(key: 'owner_reference_id');
     await storage.delete(key: 'shop_name');
+    await NotificationService.instance.clearToken();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(builder: (_) => const RoleSelectionScreen()),
@@ -116,8 +119,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.notifications_none_rounded),
-            onPressed: () =>
-                _showMessage('Notifications will be connected next.'),
+            onPressed: () async {
+              await NotificationService.instance.requestPermission();
+              _showMessage('Notification permissions updated.');
+            },
           ),
           const SizedBox(width: 4),
         ],
@@ -206,8 +211,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             title: 'Customers',
                             subtitle: '248',
                             icon: Icons.people_alt_rounded,
-                            onTap: () => _showMessage(
-                              'Customer management will be connected next.',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const CustomersListScreen(),
+                              ),
                             ),
                           ),
                           _DashboardTile(
@@ -337,48 +344,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         onPressed: _showAddNewSheet,
         child: const Icon(Icons.add_rounded, size: 30),
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedTab,
-        type: BottomNavigationBarType.fixed,
-        backgroundColor: AppColors.surface,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: AppColors.body,
-        selectedFontSize: 11,
-        unselectedFontSize: 11,
-        onTap: (index) {
-          setState(() {
-            _selectedTab = index;
-          });
 
-          if (index != 0) {
-            _showMessage(
-              '${['Home', 'Customers', 'Inventory', 'Payments', 'More'][index]} screen will be connected next.',
-            );
-          }
-        },
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home_rounded),
-            label: 'Home',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.people_alt_rounded),
-            label: 'Customers',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.inventory_2_rounded),
-            label: 'Inventory',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.account_balance_wallet_rounded),
-            label: 'Payments',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.more_horiz_rounded),
-            label: 'More',
-          ),
-        ],
-      ),
     );
   }
 }
@@ -839,12 +805,12 @@ class _ProfileSettingsDrawer extends StatefulWidget {
 
 class _ProfileSettingsDrawerState extends State<_ProfileSettingsDrawer> {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
+
   String _name = 'JewelSetu User';
-  String _shopName = 'Email not available';
-  String _email = '';
+  String _email = 'Email not available';
   String _phone = '';
   String _accountType = 'Shop Owner';
-  String _shopId = 'Shop ID not set';
+  String _shopName = '';
 
   @override
   void initState() {
@@ -855,31 +821,23 @@ class _ProfileSettingsDrawerState extends State<_ProfileSettingsDrawer> {
   Future<void> _loadProfile() async {
     try {
       final name = await _storage.read(key: 'user_name');
-      final shopName = await _storage.read(key: 'shop_name');
       final email = await _storage.read(key: 'user_email');
       final phone = await _storage.read(key: 'user_phone');
       final accountType = await _storage.read(key: 'account_type');
-      final shopId = await _storage.read(key: 'owner_reference_id');
-      final userId = await _storage.read(key: 'user_id');
+      final shopName = await _storage.read(key: 'shop_name');
+
       if (!mounted) return;
       setState(() {
         if (name != null && name.trim().isNotEmpty) _name = name.trim();
-        if (shopName != null && shopName.trim().isNotEmpty) {
-          _shopName = shopName.trim();
-        } else if (email != null && email.trim().isNotEmpty) {
-          _shopName = email.trim();
-        }
         if (email != null && email.trim().isNotEmpty) _email = email.trim();
         if (phone != null && phone.trim().isNotEmpty) _phone = phone.trim();
+        if (shopName != null && shopName.trim().isNotEmpty) {
+          _shopName = shopName.trim();
+        }
         if (accountType != null && accountType.trim().isNotEmpty) {
           _accountType = accountType.toLowerCase() == 'worker'
               ? 'Shop Worker'
               : 'Shop Owner';
-        }
-        if (shopId != null && shopId.trim().isNotEmpty) {
-          _shopId = shopId.trim();
-        } else if (userId != null && userId.trim().isNotEmpty) {
-          _shopId = userId.trim();
         }
       });
     } catch (e) {
@@ -887,114 +845,136 @@ class _ProfileSettingsDrawerState extends State<_ProfileSettingsDrawer> {
     }
   }
 
+  String get _initials {
+    final parts = _name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty);
+    final list = parts.take(2).toList();
+    if (list.isEmpty) return 'JS';
+    return list.map((part) => part[0]).join().toUpperCase();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final initials = _name.trim().isEmpty
-        ? 'JS'
-        : _name.trim().split(RegExp(r'\s+')).take(2).map((part) => part[0]).join().toUpperCase();
-
     return SafeArea(
-      child: Column(
-        children: [
-          Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 16, 8),
-              child: IconButton(
-                tooltip: 'Close menu',
-                onPressed: widget.onClose,
-                icon: const Icon(Icons.close_rounded, size: 30, color: AppColors.primary),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 8, 18, 22),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [AppColors.primary, Color(0xFF25072E)],
-                ),
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.18),
-                    blurRadius: 18,
-                    offset: const Offset(0, 8),
+      child: Container(
+        color: AppColors.background,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 16, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        RichText(
+                          text: const TextSpan(
+                            style: TextStyle(
+                              fontSize: 29,
+                              letterSpacing: -1.1,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            children: [
+                              TextSpan(
+                                text: 'Jewel',
+                                style: TextStyle(color: AppColors.goldDark),
+                              ),
+                              TextSpan(
+                                text: 'Setu',
+                                style: TextStyle(color: AppColors.primary),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        const Text(
+                          'Jewellery Shop Management',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppColors.body,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close menu',
+                    onPressed: widget.onClose,
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      size: 30,
+                      color: AppColors.heading,
+                    ),
                   ),
                 ],
               ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 26, 20, 24),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  CircleAvatar(
-                    radius: 31,
-                    backgroundColor: AppColors.gold,
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFFFFF4E6),
+                      border: Border.all(color: AppColors.gold, width: 3),
+                    ),
+                    alignment: Alignment.center,
                     child: Text(
-                      initials,
+                      _initials,
                       style: const TextStyle(
                         color: AppColors.primary,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
+                        fontSize: 29,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           _name,
-                          maxLines: 2,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            color: AppColors.gold,
+                            color: AppColors.heading,
                             fontSize: 20,
-                            fontWeight: FontWeight.w700,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                        const SizedBox(height: 5),
-                        Text(
-                          _shopName,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Color(0xFFF1DDAF), fontSize: 15),
-                        ),
-                        if (_phone.isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            _phone,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Color(0xFFE6C77F), fontSize: 12),
-                          ),
-                        ],
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 9),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
                           decoration: BoxDecoration(
-                            color: AppColors.gold,
+                            color: const Color(0xFFFFEBD0),
                             borderRadius: BorderRadius.circular(20),
                           ),
-                          child: Text(
-                            _accountType,
-                            style: const TextStyle(
-                              color: AppColors.primary,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.workspace_premium_rounded,
+                                size: 16,
+                                color: AppColors.goldDark,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _accountType,
+                                style: const TextStyle(
+                                  color: AppColors.goldDark,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          'ID: $_shopId',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Color(0xFFE6C77F), fontSize: 12),
                         ),
                       ],
                     ),
@@ -1002,62 +982,94 @@ class _ProfileSettingsDrawerState extends State<_ProfileSettingsDrawer> {
                 ],
               ),
             ),
-          ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-              children: [
-                _DrawerMenuItem(
-                  icon: Icons.person_outline_rounded,
-                  title: 'My Profile',
-                  onTap: () => widget.onItemTap('My Profile'),
-                ),
-                _DrawerMenuItem(
-                  icon: Icons.settings_outlined,
-                  title: 'Shop Settings',
-                  onTap: () => widget.onItemTap('Shop Settings'),
-                ),
-                _DrawerMenuItem(
-                  icon: Icons.language_rounded,
-                  title: 'Language',
-                  onTap: () => widget.onItemTap('Language'),
-                ),
-                _DrawerMenuItem(
-                  icon: Icons.shield_outlined,
-                  title: 'Security',
-                  onTap: () => widget.onItemTap('Security'),
-                ),
-                _DrawerMenuItem(
-                  icon: Icons.support_agent_rounded,
-                  title: 'Help & Support',
-                  onTap: () => widget.onItemTap('Help & Support'),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, color: AppColors.border),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
-            child: ListTile(
-              onTap: widget.onLogout,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-              leading: const Icon(Icons.logout_rounded, color: Color(0xFF8C1538), size: 27),
-              title: const Text(
-                'Logout',
-                style: TextStyle(
-                  color: Color(0xFF8C1538),
-                  fontSize: 19,
-                  fontWeight: FontWeight.w600,
-                ),
+            Expanded(
+              child: Stack(
+                children: [
+                  ListView(
+                    padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                    children: [
+                      _DrawerMenuItem(
+                        icon: Icons.home_rounded,
+                        title: 'Home',
+                        selected: true,
+                        onTap: () => widget.onItemTap('Home'),
+                      ),
+                      _DrawerMenuItem(
+                        icon: Icons.person_outline_rounded,
+                        title: 'My Profile',
+                        onTap: () => widget.onItemTap('My Profile'),
+                      ),
+                      _DrawerMenuItem(
+                        icon: Icons.storefront_outlined,
+                        title: 'Shop Settings',
+                        onTap: () => widget.onItemTap('Shop Settings'),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Divider(color: AppColors.border, height: 1),
+                      ),
+                      _DrawerMenuItem(
+                        icon: Icons.language_rounded,
+                        title: 'Language',
+                        onTap: () => widget.onItemTap('Language'),
+                      ),
+                      _DrawerMenuItem(
+                        icon: Icons.shield_outlined,
+                        title: 'Security',
+                        onTap: () => widget.onItemTap('Security'),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Divider(color: AppColors.border, height: 1),
+                      ),
+                      _DrawerMenuItem(
+                        icon: Icons.help_outline_rounded,
+                        title: 'Help & Support',
+                        onTap: () => widget.onItemTap('Help & Support'),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Divider(color: AppColors.border, height: 1),
+                      ),
+                      _DrawerMenuItem(
+                        icon: Icons.logout_rounded,
+                        title: 'Logout',
+                        isDestructive: true,
+                        onTap: widget.onLogout,
+                      ),
+                    ],
+                  ),
+
+                ],
               ),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             ),
-          ),
-          const Padding(
-            padding: EdgeInsets.only(bottom: 18, top: 4),
-            child: Text('v1.2.4 (Beta)', style: TextStyle(color: AppColors.body, fontSize: 13)),
-          ),
-        ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 4, 22, 18),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'v1.2.4 (Beta)',
+                      style: TextStyle(color: AppColors.body, fontSize: 12),
+                    ),
+                  ),
+                  if (_shopName.isNotEmpty)
+                    Flexible(
+                      child: Text(
+                        _shopName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppColors.body,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1068,51 +1080,64 @@ class _DrawerMenuItem extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.onTap,
+    this.selected = false,
+    this.isDestructive = false,
   });
 
   final IconData icon;
   final String title;
   final VoidCallback onTap;
+  final bool selected;
+  final bool isDestructive;
 
   @override
   Widget build(BuildContext context) {
+    final foreground = isDestructive
+        ? const Color(0xFFC62828)
+        : AppColors.primary;
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 7),
       child: Material(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
+        color: selected ? const Color(0xFFF2E8F1) : Colors.transparent,
+        borderRadius: BorderRadius.circular(22),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: AppColors.border.withValues(alpha: 0.45)),
-            ),
+          borderRadius: BorderRadius.circular(22),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
             child: Row(
               children: [
                 Container(
-                  width: 48,
-                  height: 48,
+                  width: 40,
+                  height: 40,
                   decoration: BoxDecoration(
-                    color: AppColors.gold.withValues(alpha: 0.25),
+                    color: selected ? AppColors.primary : Colors.transparent,
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(icon, color: AppColors.primary, size: 27),
+                  alignment: Alignment.center,
+                  child: Icon(
+                    icon,
+                    color: selected ? Colors.white : foreground,
+                    size: 23,
+                  ),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     title,
-                    style: const TextStyle(
-                      color: AppColors.heading,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w500,
+                    style: TextStyle(
+                      color: isDestructive ? foreground : AppColors.heading,
+                      fontSize: 16,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                     ),
                   ),
                 ),
-                const Icon(Icons.chevron_right_rounded, color: Color(0xFF9D879E), size: 28),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: isDestructive ? foreground : AppColors.primary,
+                  size: 22,
+                ),
               ],
             ),
           ),
