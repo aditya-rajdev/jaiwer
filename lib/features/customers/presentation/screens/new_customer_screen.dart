@@ -278,9 +278,9 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
           'weight_grams': double.parse(
             item.weight.text.trim().replaceAll(',', ''),
           ),
-          'rate_per_gram': double.parse(
-            item.rate.text.trim().replaceAll(',', ''),
-          ),
+          'rate_per_gram': item.rate.text.trim().isNotEmpty
+              ? double.tryParse(item.rate.text.trim().replaceAll(',', ''))
+              : null,
           'total_amount': item.total,
           if (_payPerItem) 'amount_paid': item.paid,
           'reminder_date': reminderDate,
@@ -682,9 +682,9 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
               hint: 'e.g. 12.5', controller: item.weight,
               validator: (v) => _positiveNumberValidator(v, 'Weight'))),
           const SizedBox(width: 10),
-          Expanded(child: _compactNumberField(label: 'Rate per Gram (₹) *',
+          Expanded(child: _compactNumberField(label: 'Rate per Gram (₹)',
               hint: 'e.g. 6,200', controller: item.rate,
-              validator: (v) => _positiveNumberValidator(v, 'Rate'))),
+              validator: (v) => _optionalPositiveNumberValidator(v, 'Rate'))),
         ]),
       ),
       Container(
@@ -839,6 +839,13 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
 
   String? _positiveNumberValidator(String? value, String label) {
     if (value == null || value.trim().isEmpty) return '$label is required';
+    final number = double.tryParse(value.trim().replaceAll(',', ''));
+    if (number == null || number <= 0) return 'Enter valid $label';
+    return null;
+  }
+
+  String? _optionalPositiveNumberValidator(String? value, String label) {
+    if (value == null || value.trim().isEmpty) return null;
     final number = double.tryParse(value.trim().replaceAll(',', ''));
     if (number == null || number <= 0) return 'Enter valid $label';
     return null;

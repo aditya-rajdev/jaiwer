@@ -242,6 +242,7 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
       MaterialPageRoute<void>(
         builder: (_) => CustomerDetailsScreen(
           customer: CustomerDetailsData(
+            id: customer.id,
             name: customer.name,
             phone: customer.phone,
             initials: customer.initials,
