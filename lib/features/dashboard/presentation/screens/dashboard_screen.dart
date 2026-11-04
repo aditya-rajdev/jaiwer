@@ -12,6 +12,7 @@ import '../../../customers/presentation/screens/customers_list_screen.dart';
 import '../../../suppliers/presentation/screens/suppliers_list_screen.dart';
 import '../../../metal_rates/presentation/screens/metal_rates_screen.dart';
 import '../../../onboarding/presentation/screens/role_selection_screen.dart';
+import '../../../profile/presentation/screens/profile_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -164,6 +165,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
           onLogout: _logout,
           onItemTap: (label) {
             Navigator.of(context).pop();
+
+            if (label == 'My Profile') {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ProfileScreen(
+                    onLogout: _logout,
+                  ),
+                ),
+              );
+              return;
+            }
+
             _showMessage('$label screen will be connected next.');
           },
         ),
