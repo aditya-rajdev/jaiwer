@@ -13,6 +13,8 @@ import '../../../suppliers/presentation/screens/suppliers_list_screen.dart';
 import '../../../metal_rates/presentation/screens/metal_rates_screen.dart';
 import '../../../onboarding/presentation/screens/role_selection_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
+import '../../../payments/presentation/screens/payments_screen.dart';
+import '../../../shop_settings/presentation/screens/shop_settings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -177,6 +179,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
               return;
             }
 
+            if (label == 'Shop Settings') {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const ShopSettingsScreen(),
+                ),
+              );
+              return;
+            }
+
             _showMessage('$label screen will be connected next.');
           },
         ),
@@ -282,8 +293,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             title: 'Payments',
                             subtitle: 'Today: ₹ 45,000',
                             icon: Icons.account_balance_wallet_rounded,
-                            onTap: () => _showMessage(
-                              'Payments will be connected next.',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const PaymentsScreen(),
+                              ),
                             ),
                           ),
                           _DashboardTile(
