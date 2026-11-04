@@ -2,12 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:http/http.dart' as http;
 
 import '../../../../config/app_config.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../services/api_client.dart';
 
 class MetalRatesScreen extends StatefulWidget {
   const MetalRatesScreen({super.key});
@@ -59,30 +58,18 @@ class _MetalRatesScreenState extends State<MetalRatesScreen> {
   }
 
   Future<Map<String, dynamic>> _fetchMetal(String metal) async {
-    const storage = FlutterSecureStorage();
-    final accessToken = await storage.read(key: 'access_token');
-
-    debugPrint('[$metal] Storage token present: ${accessToken != null && accessToken.trim().isNotEmpty}');
-
-    if (accessToken == null || accessToken.trim().isEmpty) {
-      throw Exception('User is not authenticated');
-    }
-
     final endpoint = metal == 'gold'
         ? ApiConfig.goldRatesUrl
         : ApiConfig.silverRatesUrl;
 
     debugPrint('[$metal] Fetching URL: $endpoint');
 
-    final response = await http
-        .get(
-          Uri.parse(endpoint),
-          headers: {
-            'Authorization': 'Bearer $accessToken',
-            'Accept': 'application/json',
-          },
-        )
-        .timeout(const Duration(seconds: 20));
+    final response = await ApiClient.instance.get(
+      Uri.parse(endpoint),
+      headers: const {
+        'Accept': 'application/json',
+      },
+    );
 
     debugPrint('[$metal] HTTP Status Code: ${response.statusCode}');
     debugPrint('[$metal] HTTP Response Body: ${response.body}');

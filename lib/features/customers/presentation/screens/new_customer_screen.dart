@@ -3,9 +3,9 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:http/http.dart' as http;
 
 import '../../../../config/app_config.dart';
+import '../../../../services/api_client.dart';
 
 /// Add New Entry screen with support for multiple jewellery items.
 /// Replace lib/features/customers/presentation/screens/new_customer_screen.dart.
@@ -86,7 +86,6 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
   static const Color _muted = Color(0xFF8A858B);
 
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
-  static const Duration _requestTimeout = Duration(seconds: 25);
 
   final _formKey = GlobalKey<FormState>();
   bool _isSaving = false;
@@ -299,17 +298,14 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
     setState(() => _isSaving = true);
     try {
       final uri = Uri.parse('${ApiConfig.baseUrl}/add-customer');
-      final response = await http
-          .post(
+      final response = await ApiClient.instance.post(
         uri,
-        headers: {
+        headers: const {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'Authorization': 'Bearer ${accessToken.trim()}',
         },
         body: jsonEncode(payload),
-      )
-          .timeout(_requestTimeout);
+      );
 
       dynamic responseData;
       try {

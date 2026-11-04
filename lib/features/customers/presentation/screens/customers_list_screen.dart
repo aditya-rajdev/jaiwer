@@ -1,12 +1,11 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../config/app_config.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../services/api_client.dart';
 import 'new_customer_screen.dart';
 import 'customer_details_screen.dart';
 
@@ -21,7 +20,6 @@ class CustomersListScreen extends StatefulWidget {
 }
 
 class _CustomersListScreenState extends State<CustomersListScreen> {
-  static const FlutterSecureStorage _storage = FlutterSecureStorage();
 
   final TextEditingController _searchController = TextEditingController();
   List<_Customer> _customers = <_Customer>[];
@@ -56,20 +54,12 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
     }
 
     try {
-      final token = await _storage.read(key: 'access_token');
-      if (token == null || token.trim().isEmpty) {
-        throw Exception('Session expired. Please sign in again.');
-      }
-
-      final response = await http
-          .get(
+      final response = await ApiClient.instance.get(
         Uri.parse('${ApiConfig.baseUrl}/customers'),
         headers: <String, String>{
           'Accept': 'application/json',
-          'Authorization': 'Bearer $token',
         },
-      )
-          .timeout(const Duration(seconds: 25));
+      );
 
       if (response.statusCode == 200) {
         final dynamic decoded = jsonDecode(response.body);
