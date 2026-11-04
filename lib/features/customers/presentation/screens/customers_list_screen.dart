@@ -5,13 +5,12 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../config/app_config.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/widgets/skeleton_widgets.dart';
 import '../../../../services/api_client.dart';
+import '../../../../services/cache_service.dart';
 import 'new_customer_screen.dart';
 import 'customer_details_screen.dart';
 
-/// Customer list backed by GET /customers.
-/// The backend's current summary response provides customer_id, name,
-/// phone_number and amount_owed. Total/item-count require a richer API response.
 class CustomersListScreen extends StatefulWidget {
   const CustomersListScreen({super.key});
 
@@ -20,11 +19,12 @@ class CustomersListScreen extends StatefulWidget {
 }
 
 class _CustomersListScreenState extends State<CustomersListScreen> {
-
   final TextEditingController _searchController = TextEditingController();
   List<_Customer> _customers = <_Customer>[];
   String _selectedFilter = 'All';
   bool _isLoading = true;
+  bool _isOffline = false;
+  String? _lastUpdatedTime;
   String? _error;
 
   @override
@@ -46,13 +46,33 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
   }
 
   Future<void> _loadCustomers() async {
-    if (mounted) {
-      setState(() {
-        _isLoading = true;
-        _error = null;
-      });
+    // 1. Read cached data first for instant offline/cache load
+    final cached = await CacheService.instance.getCacheData('cache_customers');
+    final timestamp = await CacheService.instance.getCacheTimestamp('cache_customers');
+
+    if (cached != null) {
+      final parsedCached = _parseCustomersPayload(cached);
+      if (mounted) {
+        setState(() {
+          _customers = parsedCached;
+          _isLoading = false;
+          _error = null;
+          if (timestamp != null) {
+            _lastUpdatedTime =
+                '${timestamp.day}/${timestamp.month}/${timestamp.year} ${timestamp.hour}:${timestamp.minute.toString().padLeft(2, '0')}';
+          }
+        });
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+          _error = null;
+        });
+      }
     }
 
+    // 2. Fetch fresh backend data
     try {
       final response = await ApiClient.instance.get(
         Uri.parse('${ApiConfig.baseUrl}/customers'),
@@ -63,47 +83,15 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
 
       if (response.statusCode == 200) {
         final dynamic decoded = jsonDecode(response.body);
+        await CacheService.instance.saveCache('cache_customers', decoded);
 
-        List rawList = [];
-        if (decoded is Map<String, dynamic>) {
-          final customersList = decoded['customers'];
-          if (customersList is List) {
-            rawList = customersList;
-          }
-        } else if (decoded is List) {
-          rawList = decoded;
-        } else {
-          throw const FormatException(
-            'Unexpected customers response from server.',
-          );
-        }
-
-        final parsed = rawList
-            .whereType<Map>()
-            .map((row) {
-          final map = Map<String, dynamic>.from(row);
-          final name = (map['name'] ?? 'Unknown customer').toString();
-          final phone = (map['phone_number'] ?? '').toString();
-          final owed = _toDouble(
-            map['total_due_amount'] ?? map['amount_owed'] ?? map['baki'] ?? map['due_amount'],
-          );
-          final id = (map['customer_id'] ?? map['id'] ?? '').toString();
-          final initials = _initials(name);
-
-          return _Customer(
-            id: id,
-            name: name,
-            phone: phone,
-            amountOwed: owed,
-            initials: initials,
-          );
-        })
-            .toList();
+        final parsed = _parseCustomersPayload(decoded);
 
         if (!mounted) return;
         setState(() {
           _customers = parsed;
           _isLoading = false;
+          _isOffline = false;
           _error = null;
         });
       } else if (response.statusCode == 401 || response.statusCode == 403) {
@@ -115,24 +103,55 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
           if (body is Map && body['detail'] != null) {
             message = body['detail'].toString();
           }
-        } catch (_) {
-          // Keep the status-code message when the response isn't JSON.
-        }
+        } catch (_) {}
         throw Exception(message);
       }
-    } on FormatException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _error = e.message;
-      });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _error = e.toString().replaceFirst('Exception: ', '');
-      });
+      if (_customers.isNotEmpty) {
+        // Keep cached content visible and show offline banner
+        setState(() {
+          _isLoading = false;
+          _isOffline = true;
+        });
+      } else {
+        setState(() {
+          _isLoading = false;
+          _error = e.toString().replaceFirst('Exception: ', '');
+        });
+      }
     }
+  }
+
+  List<_Customer> _parseCustomersPayload(dynamic decoded) {
+    List rawList = [];
+    if (decoded is Map<String, dynamic>) {
+      final customersList = decoded['customers'];
+      if (customersList is List) {
+        rawList = customersList;
+      }
+    } else if (decoded is List) {
+      rawList = decoded;
+    }
+
+    return rawList.whereType<Map>().map((row) {
+      final map = Map<String, dynamic>.from(row);
+      final name = (map['name'] ?? 'Unknown customer').toString();
+      final phone = (map['phone_number'] ?? '').toString();
+      final owed = _toDouble(
+        map['total_due_amount'] ?? map['amount_owed'] ?? map['baki'] ?? map['due_amount'],
+      );
+      final id = (map['customer_id'] ?? map['id'] ?? '').toString();
+      final initials = _initials(name);
+
+      return _Customer(
+        id: id,
+        name: name,
+        phone: phone,
+        amountOwed: owed,
+        initials: initials,
+      );
+    }).toList();
   }
 
   String _initials(String name) {
@@ -162,7 +181,6 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
     }).toList();
 
     if (_selectedFilter == 'Recent') {
-      // The current API summary doesn't return created_at, so preserve server order.
       return list;
     }
     return list;
@@ -183,17 +201,13 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
   }
 
   Future<void> _addCustomer() async {
-    // NewCustomerScreen returns true after a successful API creation.
-    final result = await Navigator.of(context).push<bool>(
+    await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => const NewCustomerScreen(),
       ),
     );
 
-    // Always refresh on return as a safeguard, even if the form doesn't return true.
-    if (mounted && result == true) {
-      await _loadCustomers();
-    } else if (mounted) {
+    if (mounted) {
       await _loadCustomers();
     }
   }
@@ -258,7 +272,7 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final customers = _filteredCustomers;
+    final customersToDisplay = _filteredCustomers;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -267,15 +281,15 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 22),
+          onPressed: () => Navigator.maybePop(context),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 21),
           color: AppColors.heading,
-          onPressed: () => Navigator.of(context).pop(),
         ),
-        title: Text(
-          'Customers (${_isLoading ? '…' : customers.length})',
-          style: const TextStyle(
+        title: const Text(
+          'Customers',
+          style: TextStyle(
             color: AppColors.heading,
-            fontSize: 22,
+            fontSize: 20,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -298,6 +312,7 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
         top: false,
         child: Column(
           children: [
+            if (_isOffline) OfflineBanner(lastUpdated: _lastUpdatedTime),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
               child: TextField(
@@ -375,73 +390,82 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
             const SizedBox(height: 8),
             Expanded(
               child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const SkeletonList()
                   : _error != null
-                  ? _LoadError(
-                message: _error!,
-                onRetry: _loadCustomers,
-              )
-                  : customers.isEmpty
-                  ? RefreshIndicator(
-                onRefresh: _loadCustomers,
-                child: ListView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  children: const [
-                    SizedBox(height: 120),
-                    Icon(
-                      Icons.people_outline_rounded,
-                      size: 56,
-                      color: AppColors.body,
-                    ),
-                    SizedBox(height: 12),
-                    Center(
-                      child: Text(
-                        'No customers found',
-                        style: TextStyle(
-                          color: AppColors.body,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              )
-                  : RefreshIndicator(
-                onRefresh: _loadCustomers,
-                child: ListView.separated(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding:
-                  const EdgeInsets.fromLTRB(20, 2, 20, 96),
-                  itemCount: customers.length,
-                  separatorBuilder: (_, __) => const Divider(
-                    height: 1,
-                    indent: 8,
-                    endIndent: 8,
-                    color: AppColors.border,
-                  ),
-                  itemBuilder: (context, index) {
-                    final customer = customers[index];
-                    return _CustomerTile(
-                      customer: customer,
-                      bakiText: _money(customer.amountOwed),
-                      onTap: () => _openCustomer(customer),
-                      onCall: () => _callCustomer(customer),
-                      onMessage: () => _messageCustomer(customer),
-                    );
-                  },
-                ),
-              ),
+                      ? _LoadError(
+                          message: _error!,
+                          onRetry: _loadCustomers,
+                        )
+                      : customersToDisplay.isEmpty
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.people_outline_rounded,
+                                      size: 48,
+                                      color: AppColors.body,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    const Text(
+                                      'No customers yet',
+                                      style: TextStyle(
+                                        color: AppColors.heading,
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    const Text(
+                                      'Add your first customer to start managing purchases and payments.',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: AppColors.body,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : RefreshIndicator(
+                              color: AppColors.primary,
+                              onRefresh: _loadCustomers,
+                              child: ListView.separated(
+                                padding: const EdgeInsets.fromLTRB(20, 4, 20, 90),
+                                itemCount: customersToDisplay.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 12),
+                                itemBuilder: (context, index) {
+                                  final customer = customersToDisplay[index];
+                                  return _CustomerTile(
+                                    customer: customer,
+                                    onTap: () => _openCustomer(customer),
+                                    onCall: () => _callCustomer(customer),
+                                    onMessage: () => _messageCustomer(customer),
+                                    formatMoney: _money,
+                                  );
+                                },
+                              ),
+                            ),
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: FloatingActionButton.extended(
         onPressed: _addCustomer,
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
-        elevation: 5,
-        shape: const CircleBorder(),
-        child: const Icon(Icons.add_rounded, size: 34),
+        icon: const Icon(Icons.person_add_alt_1_rounded),
+        label: const Text(
+          'Add Customer',
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ),
     );
   }
@@ -466,41 +490,64 @@ class _Customer {
 class _CustomerTile extends StatelessWidget {
   const _CustomerTile({
     required this.customer,
-    required this.bakiText,
     required this.onTap,
     required this.onCall,
     required this.onMessage,
+    required this.formatMoney,
   });
 
   final _Customer customer;
-  final String bakiText;
   final VoidCallback onTap;
   final VoidCallback onCall;
   final VoidCallback onMessage;
+  final String Function(double) formatMoney;
 
   @override
   Widget build(BuildContext context) {
-    final phone = customer.phone.startsWith('+')
-        ? customer.phone
-        : customer.phone.isEmpty
-        ? 'Phone not available'
-        : '+${customer.phone}';
+    final isBaki = customer.amountOwed > 0;
+    final isJama = customer.amountOwed < 0;
+    final absAmount = customer.amountOwed.abs();
+
+    final badgeText = isBaki
+        ? 'Baki'
+        : isJama
+            ? 'Jama'
+            : 'Settled';
+
+    final badgeColor = isBaki
+        ? AppColors.error
+        : isJama
+            ? AppColors.success
+            : AppColors.body;
 
     return InkWell(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 3),
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.border),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.heading.withValues(alpha: 0.025),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
         child: Row(
           children: [
             CircleAvatar(
-              radius: 30,
-              backgroundColor: const Color(0xFFF8E4C8),
+              radius: 24,
+              backgroundColor: const Color(0xFFF3E7F8),
               child: Text(
                 customer.initials,
                 style: const TextStyle(
-                  color: Colors.black,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
                 ),
               ),
             ),
@@ -519,92 +566,63 @@ class _CustomerTile extends StatelessWidget {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(height: 5),
+                  const SizedBox(height: 4),
                   Text(
-                    phone,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    customer.phone.isEmpty
+                        ? 'No phone number'
+                        : customer.phone,
                     style: const TextStyle(
                       color: AppColors.body,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 7),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      InkWell(
-                        onTap: onCall,
-                        borderRadius: BorderRadius.circular(18),
-                        child: const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.call_outlined, size: 16, color: AppColors.success),
-                              SizedBox(width: 4),
-                              Text('Call', style: TextStyle(color: AppColors.success, fontSize: 12, fontWeight: FontWeight.w600)),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      InkWell(
-                        onTap: onMessage,
-                        borderRadius: BorderRadius.circular(18),
-                        child: const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.message_outlined, size: 16, color: AppColors.primary),
-                              SizedBox(width: 4),
-                              Text('Message', style: TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.w600)),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    'Customer ID: ${customer.id.isEmpty ? '—' : customer.id.substring(0, customer.id.length > 8 ? 8 : customer.id.length)}',
-                    style: const TextStyle(
-                      color: AppColors.body,
-                      fontSize: 12,
+                      fontSize: 13,
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                const Text(
-                  'Baki',
-                  style: TextStyle(color: AppColors.body, fontSize: 12),
-                ),
-                const SizedBox(height: 5),
                 Text(
-                  '₹ $bakiText',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  '₹ ${formatMoney(absAmount)}',
                   style: TextStyle(
-                    color: customer.amountOwed <= 0
-                        ? AppColors.success
-                        : AppColors.error,
-                    fontSize: 14,
+                    color: badgeColor,
+                    fontSize: 15,
                     fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: badgeColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    badgeText,
+                    style: TextStyle(
+                      color: badgeColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(width: 4),
-            const Icon(
-              Icons.chevron_right_rounded,
+            const SizedBox(width: 8),
+            IconButton(
+              onPressed: onCall,
+              icon: const Icon(Icons.phone_outlined, size: 20),
               color: AppColors.primary,
-              size: 25,
+              visualDensity: VisualDensity.compact,
+            ),
+            IconButton(
+              onPressed: onMessage,
+              icon: const Icon(Icons.message_outlined, size: 20),
+              color: AppColors.primary,
+              visualDensity: VisualDensity.compact,
             ),
           ],
         ),

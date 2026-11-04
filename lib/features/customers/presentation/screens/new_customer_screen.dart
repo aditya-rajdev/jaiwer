@@ -99,15 +99,21 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
   bool _sendSmsReminder = false;
   String _language = 'English';
 
-  // Backend expects E.164 format, e.g. +919876543210.
+  // Backend expects E.164 format matching ^\+[1-9]\d{7,14}$, e.g. +919876543210.
   String _normalizePhoneNumber(String input) {
-    var phone = input.trim().replaceAll(RegExp(r'[\s()\-]'), '');
-    if (RegExp(r'^[6-9]\d{9}$').hasMatch(phone)) {
-      phone = '+91$phone';
-    } else if (RegExp(r'^91[6-9]\d{9}$').hasMatch(phone)) {
-      phone = '+$phone';
+    var digits = input.trim().replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return input.trim();
+    while (digits.startsWith('0')) {
+      digits = digits.substring(1);
     }
-    return phone;
+    if (digits.length == 10) {
+      return '+91$digits';
+    } else if (digits.length == 12 && digits.startsWith('91')) {
+      return '+$digits';
+    } else if (digits.length >= 8 && digits.length <= 15) {
+      return '+$digits';
+    }
+    return '+$digits';
   }
 
   bool _isValidE164(String phone) =>
@@ -234,14 +240,127 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
 
     // This endpoint is confirmed for customers only. Do not send supplier
     // records to the customer endpoint.
+    final reminderDate = _reminderDate == null
+        ? null
+        : '${_reminderDate!.year.toString().padLeft(4, '0')}-'
+        '${_reminderDate!.month.toString().padLeft(2, '0')}-'
+        '${_reminderDate!.day.toString().padLeft(2, '0')}';
+
+    final paymentMode = _payPerItem ? 'item_wise' : 'total';
+    const paymentMethod = 'cash';
+
     if (widget.isSupplier) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Supplier API endpoint is not configured yet. No data was saved.',
-          ),
-        ),
-      );
+      final supplierPayload = <String, dynamic>{
+        'supplier_name': _nameController.text.trim(),
+        'phone_number': _normalizePhoneNumber(_phoneController.text),
+        'address': _addressController.text.trim().isNotEmpty
+            ? _addressController.text.trim()
+            : null,
+        'payment_mode': paymentMode,
+        'payment_method': paymentMethod,
+        'total_payment': _payPerItem ? 0 : _overallPaid,
+        'notes': null,
+        'items': _items.map((item) {
+          final rateText = item.rate.text.trim().replaceAll(',', '');
+          final weightText = item.weight.text.trim().replaceAll(',', '');
+          return <String, dynamic>{
+            'item_name': item.name.text.trim(),
+            'weight_grams':
+                weightText.isNotEmpty ? double.tryParse(weightText) : null,
+            'rate_per_gram':
+                rateText.isNotEmpty ? double.tryParse(rateText) : null,
+            'total_amount': item.total,
+            'amount_paid': _payPerItem ? item.paid : 0,
+          };
+        }).toList(),
+      };
+
+      setState(() => _isSaving = true);
+      try {
+        var response = await ApiClient.instance.post(
+          Uri.parse('${ApiConfig.baseUrl}/api/suppliers'),
+          headers: const {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: jsonEncode(supplierPayload),
+        );
+
+        if (response.statusCode == 404 || response.statusCode == 405) {
+          response = await ApiClient.instance.post(
+            Uri.parse(ApiConfig.suppliersUrl),
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode(supplierPayload),
+          );
+        }
+
+        dynamic responseData;
+        try {
+          responseData = jsonDecode(response.body);
+        } on FormatException {
+          responseData = null;
+        }
+
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Supplier saved successfully.'),
+              backgroundColor: Color(0xFF247A4B),
+            ),
+          );
+          Navigator.of(context).maybePop(true);
+          return;
+        }
+
+        final serverMessage = responseData is Map
+            ? (responseData['detail'] ??
+                responseData['message'] ??
+                responseData['error'])
+                ?.toString()
+            : null;
+
+        String message;
+        if (response.statusCode == 401) {
+          message = 'Login session expired. Please log in again.';
+        } else if (response.statusCode == 422) {
+          if (responseData is Map && responseData['detail'] != null) {
+            final detail = responseData['detail'];
+            if (detail is List) {
+              message = detail.map((e) {
+                if (e is Map) {
+                  final loc = (e['loc'] as List?)?.join('.') ?? '';
+                  final msg = e['msg'] ?? '';
+                  return '$loc: $msg';
+                }
+                return e.toString();
+              }).join(', ');
+            } else {
+              message = detail.toString();
+            }
+          } else {
+            message = 'Some supplier or item fields are invalid.';
+          }
+        } else {
+          message = serverMessage ??
+              'Could not save supplier (HTTP ${response.statusCode}).';
+        }
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving supplier: $e')),
+        );
+      } finally {
+        if (mounted) setState(() => _isSaving = false);
+      }
       return;
     }
 
@@ -255,15 +374,6 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
       );
       return;
     }
-
-    final reminderDate = _reminderDate == null
-        ? null
-        : '${_reminderDate!.year.toString().padLeft(4, '0')}-'
-        '${_reminderDate!.month.toString().padLeft(2, '0')}-'
-        '${_reminderDate!.day.toString().padLeft(2, '0')}';
-
-    final paymentMode = _payPerItem ? 'item_wise' : 'total';
-    const paymentMethod = 'cash';
 
     final payload = <String, dynamic>{
       'name': _nameController.text.trim(),
@@ -389,8 +499,8 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
           onPressed: () => Navigator.of(context).maybePop(),
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: _purple),
         ),
-        title: const Text('Add New Entry',
-            style: TextStyle(color: _text, fontSize: 19, fontWeight: FontWeight.w700)),
+        title: Text(isCustomer ? 'Add New Customer' : 'Add New Supplier',
+            style: const TextStyle(color: _text, fontSize: 19, fontWeight: FontWeight.w700)),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -424,7 +534,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
               _sectionTitle(isCustomer ? 'Customer Details' : 'Supplier Details'),
               const SizedBox(height: 8),
               _groupCard([
-                _inputRow(icon: Icons.person_rounded, label: 'Full Name *',
+                _inputRow(icon: Icons.person_rounded, label: isCustomer ? 'Full Name *' : 'Supplier Name *',
                     hint: isCustomer ? 'Enter customer name' : 'Enter supplier name',
                     controller: _nameController,
                     validator: (v) => (v == null || v.trim().isEmpty) ? 'Name is required' : null),
@@ -662,6 +772,9 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
         Container(width: 25, height: 25, alignment: Alignment.center,
             decoration: const BoxDecoration(color: Color(0xFFF4D18A), shape: BoxShape.circle),
             child: Text('${index + 1}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _text))),
+        const SizedBox(width: 8),
+        Text(!widget.isSupplier ? 'Customer Item' : 'Supplier Item',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _text)),
         const Spacer(),
         IconButton(
           visualDensity: VisualDensity.compact,

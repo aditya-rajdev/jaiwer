@@ -1,11 +1,15 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/skeleton_widgets.dart';
+import '../../../../services/connectivity_service.dart';
 import '../../../../services/notification_service.dart';
 import '../../../customers/presentation/screens/new_customer_screen.dart';
 import '../../../customers/presentation/screens/customers_list_screen.dart';
+import '../../../suppliers/presentation/screens/suppliers_list_screen.dart';
 import '../../../metal_rates/presentation/screens/metal_rates_screen.dart';
 import '../../../onboarding/presentation/screens/role_selection_screen.dart';
 
@@ -19,6 +23,27 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _showCash = true;
+  bool _isOffline = false;
+  StreamSubscription<bool>? _connectivitySub;
+
+  @override
+  void initState() {
+    super.initState();
+    _isOffline = !ConnectivityService.instance.isOnline;
+    _connectivitySub = ConnectivityService.instance.onConnectivityChanged.listen((isOnline) {
+      if (mounted) {
+        setState(() {
+          _isOffline = !isOnline;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _connectivitySub?.cancel();
+    super.dispose();
+  }
   int _selectedTab = 0;
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
@@ -162,6 +187,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (_isOffline)
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 12),
+                          child: OfflineBanner(),
+                        ),
                       _CashCard(
                         showCash: _showCash,
                         onToggle: () {
@@ -205,7 +235,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         physics: const NeverScrollableScrollPhysics(),
                         mainAxisSpacing: 10,
                         crossAxisSpacing: 10,
-                        childAspectRatio: isWide ? 1.0 : 0.92,
+                        childAspectRatio: isWide ? 1.0 : 0.86,
                         children: [
                           _DashboardTile(
                             title: 'Customers',
@@ -219,10 +249,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                           _DashboardTile(
                             title: 'Suppliers',
-                            subtitle: '34',
+                            subtitle: 'Manage',
                             icon: Icons.inventory_2_rounded,
-                            onTap: () => _showMessage(
-                              'Supplier management will be connected next.',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const SuppliersListScreen(),
+                              ),
                             ),
                           ),
                           _DashboardTile(
@@ -491,30 +523,33 @@ class _DashboardTile extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: AppColors.border.withValues(alpha: 0.55)),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 30, color: AppColors.goldDark),
-              const SizedBox(height: 10),
+              Icon(icon, size: 28, color: AppColors.goldDark),
+              const SizedBox(height: 6),
               Text(
                 title,
                 textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: AppColors.heading,
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(height: 5),
+              const SizedBox(height: 3),
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
-                maxLines: 2,
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: AppColors.body, fontSize: 11),
               ),

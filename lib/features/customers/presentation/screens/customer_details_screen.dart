@@ -4,7 +4,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../config/app_config.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/widgets/skeleton_widgets.dart';
 import '../../../../services/api_client.dart';
+import '../../../../services/cache_service.dart';
 import 'new_customer_screen.dart';
 
 class CustomerDetailsData {
@@ -69,6 +71,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
 
   List<_CustomerItem> _items = [];
   bool _isLoadingItems = false;
+  bool _isOffline = false;
+  String? _lastUpdatedTime;
   String? _itemsError;
 
   String _address = 'Address not added';
@@ -169,11 +173,29 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     final id = widget.customer.id.trim();
     if (id.isEmpty) return;
 
-    if (mounted) {
-      setState(() {
-        _isLoadingItems = true;
-        _itemsError = null;
-      });
+    final cacheKey = 'cache_customer_details_$id';
+    final cached = await CacheService.instance.getCacheData(cacheKey);
+    final timestamp = await CacheService.instance.getCacheTimestamp(cacheKey);
+
+    if (cached != null && cached is Map<String, dynamic>) {
+      _applyDecodedData(cached);
+      if (mounted) {
+        setState(() {
+          _isLoadingItems = false;
+          _itemsError = null;
+          if (timestamp != null) {
+            _lastUpdatedTime =
+                '${timestamp.day}/${timestamp.month}/${timestamp.year} ${timestamp.hour}:${timestamp.minute.toString().padLeft(2, '0')}';
+          }
+        });
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _isLoadingItems = true;
+          _itemsError = null;
+        });
+      }
     }
 
     try {
@@ -185,28 +207,10 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final dynamic decoded = jsonDecode(response.body);
         if (decoded is Map<String, dynamic>) {
-          final custMap = decoded['customer'];
-          if (custMap is Map && custMap['address'] != null) {
-            final addr = custMap['address'].toString().trim();
-            if (addr.isNotEmpty) {
-              _address = addr;
-            }
-          }
-
-          final summaryMap = decoded['summary'];
-          if (summaryMap is Map) {
-            _fetchedTotal = _toInt(summaryMap['total_amount']);
-            _fetchedPaid = _toInt(summaryMap['total_paid']);
-            _fetchedBaki = _toInt(summaryMap['total_due']);
-          }
-
-          final itemsList = decoded['items'];
-          if (itemsList is List) {
-            _items = _parseItems(itemsList);
-          }
+          await CacheService.instance.saveCache(cacheKey, decoded);
+          _applyDecodedData(decoded);
         }
       } else {
-        // Fallback to /customers/{customer_id}/items if customer details route isn't available
         final itemsResponse = await ApiClient.instance.get(
           Uri.parse('${ApiConfig.baseUrl}/customers/$id/items'),
           headers: const {'Accept': 'application/json'},
@@ -227,14 +231,44 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       if (!mounted) return;
       setState(() {
         _isLoadingItems = false;
+        _isOffline = false;
         _itemsError = null;
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _isLoadingItems = false;
-        _itemsError = e.toString().replaceFirst('Exception: ', '');
-      });
+      if (_items.isNotEmpty) {
+        setState(() {
+          _isLoadingItems = false;
+          _isOffline = true;
+        });
+      } else {
+        setState(() {
+          _isLoadingItems = false;
+          _itemsError = e.toString().replaceFirst('Exception: ', '');
+        });
+      }
+    }
+  }
+
+  void _applyDecodedData(Map<String, dynamic> decoded) {
+    final custMap = decoded['customer'];
+    if (custMap is Map && custMap['address'] != null) {
+      final addr = custMap['address'].toString().trim();
+      if (addr.isNotEmpty) {
+        _address = addr;
+      }
+    }
+
+    final summaryMap = decoded['summary'];
+    if (summaryMap is Map) {
+      _fetchedTotal = _toInt(summaryMap['total_amount']);
+      _fetchedPaid = _toInt(summaryMap['total_paid']);
+      _fetchedBaki = _toInt(summaryMap['total_due']);
+    }
+
+    final itemsList = decoded['items'];
+    if (itemsList is List) {
+      _items = _parseItems(itemsList);
     }
   }
 
@@ -324,6 +358,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
           children: [
+            if (_isOffline) OfflineBanner(lastUpdated: _lastUpdatedTime),
             _card(
               child: Row(children: [
                 CircleAvatar(
@@ -375,12 +410,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
             Container(height: 1, color: _border),
             const SizedBox(height: 10),
             if (_isLoadingItems) ...[
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 36),
-                child: Center(
-                  child: CircularProgressIndicator(color: _purple),
-                ),
-              ),
+              const SkeletonTransactionList(count: 3),
             ] else if (_itemsError != null) ...[
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),

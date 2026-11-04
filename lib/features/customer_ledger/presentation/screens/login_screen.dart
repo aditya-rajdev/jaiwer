@@ -168,14 +168,18 @@ class _LoginScreenState extends State<LoginScreen> {
                 icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _purple),
               ),
               const SizedBox(height: 16),
-              Center(
-                child: Image.asset(
-                  'assets/images/jewelsetu_logo.png',
-                  height: 108,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => const Text(
-                    'JewelSetu',
-                    style: TextStyle(color: _purple, fontSize: 30, fontWeight: FontWeight.bold),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: Text(
+                    'JAIWER',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      color: _purple,
+                      fontSize: 38,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 2.0,
+                    ),
                   ),
                 ),
               ),

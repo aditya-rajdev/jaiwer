@@ -73,27 +73,19 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                     ),
                   ),
 
-                  Center(
-                    child: Image.asset(
-                      'assets/images/jewelsetu_logo.png',
-                      width: 500,
-                      height: 200,
-                      fit: BoxFit.contain,
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          width: 100,
-                          height: 100,
-                          decoration: BoxDecoration(
-                            color: AppColors.surfaceSecondary,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Icon(
-                            Icons.diamond_outlined,
-                            size: 52,
-                            color: AppColors.primary,
-                          ),
-                        );
-                      },
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text(
+                        'JAIWER',
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 38,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 2.0,
+                          color: AppColors.primary,
+                        ),
+                      ),
                     ),
                   ),
 

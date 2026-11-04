@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import '../../../../config/app_config.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/skeleton_widgets.dart';
 import '../../../../services/api_client.dart';
+import '../../../../services/cache_service.dart';
 
 class MetalRatesScreen extends StatefulWidget {
   const MetalRatesScreen({super.key});
@@ -71,9 +73,6 @@ class _MetalRatesScreenState extends State<MetalRatesScreen> {
       },
     );
 
-    debugPrint('[$metal] HTTP Status Code: ${response.statusCode}');
-    debugPrint('[$metal] HTTP Response Body: ${response.body}');
-
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception(
         '$metal rates request failed '
@@ -99,39 +98,56 @@ class _MetalRatesScreenState extends State<MetalRatesScreen> {
   Future<void> _loadRates() async {
     if (_loading) return;
 
-    setState(() {
-      _loading = true;
-    });
+    // 1. Load cached metal rates if available
+    final cachedGold = await CacheService.instance.getCacheData('cache_metal_gold');
+    final cachedSilver = await CacheService.instance.getCacheData('cache_metal_silver');
+    final timestamp = await CacheService.instance.getCacheTimestamp('cache_metal_gold');
 
+    if (cachedGold != null || cachedSilver != null) {
+      if (mounted) {
+        setState(() {
+          if (cachedGold is Map<String, dynamic>) _gold = cachedGold;
+          if (cachedSilver is Map<String, dynamic>) _silver = cachedSilver;
+          if (timestamp != null) _lastUpdated = timestamp;
+          _loading = false;
+        });
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _loading = true;
+        });
+      }
+    }
+
+    // 2. Fetch fresh metal rates from backend
     Map<String, dynamic>? goldResult;
     Map<String, dynamic>? silverResult;
 
-    Object? goldError;
-    Object? silverError;
-
     try {
       goldResult = await _fetchMetal('gold');
+      await CacheService.instance.saveCache('cache_metal_gold', goldResult);
       debugPrint('GOLD API: success');
     } catch (error) {
-      goldError = error;
       debugPrint('GOLD API ERROR: $error');
     }
 
     try {
       silverResult = await _fetchMetal('silver');
+      await CacheService.instance.saveCache('cache_metal_silver', silverResult);
       debugPrint('SILVER API: success');
     } catch (error) {
-      silverError = error;
       debugPrint('SILVER API ERROR: $error');
     }
 
     if (!mounted) return;
 
     setState(() {
-      _gold = goldResult;
-      _silver = silverResult;
+      if (goldResult != null) _gold = goldResult;
+      if (silverResult != null) _silver = silverResult;
 
-      _hasError = goldError != null || silverError != null;
+      _hasError = (goldResult == null && _gold == null) ||
+          (silverResult == null && _silver == null);
 
       if (goldResult != null || silverResult != null) {
         _lastUpdated = DateTime.now();
@@ -259,142 +275,144 @@ class _MetalRatesScreenState extends State<MetalRatesScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.access_time_rounded,
-                        size: 16,
-                        color: AppColors.body,
-                      ),
-                      const SizedBox(width: 7),
-                      Expanded(
-                        child: Text(
-                          'Last updated: $_formattedDate',
-                          style: AppTextStyles.helper,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 11,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _hasError
-                              ? const Color(0xFFFCE8E6)
-                              : const Color(0xFFE2F5E8),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
+        child: _loading && _gold == null && _silver == null
+            ? const SkeletonMetalRates()
+            : SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
                           children: [
-                            Icon(
-                              Icons.circle,
-                              size: 8,
-                              color: _hasError
-                                  ? const Color(0xFFB42318)
-                                  : AppColors.success,
+                            const Icon(
+                              Icons.access_time_rounded,
+                              size: 16,
+                              color: AppColors.body,
                             ),
-                            const SizedBox(width: 5),
-                            Text(
-                              _hasError
-                                  ? 'Unavailable'
-                                  : (_loading ? 'Updating' : 'Live'),
-                              style: TextStyle(
+                            const SizedBox(width: 7),
+                            Expanded(
+                              child: Text(
+                                'Last updated: $_formattedDate',
+                                style: AppTextStyles.helper,
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 11,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
                                 color: _hasError
-                                    ? const Color(0xFFB42318)
-                                    : AppColors.success,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                                    ? const Color(0xFFFCE8E6)
+                                    : const Color(0xFFE2F5E8),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.circle,
+                                    size: 8,
+                                    color: _hasError
+                                        ? const Color(0xFFB42318)
+                                        : AppColors.success,
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    _hasError
+                                        ? 'Unavailable'
+                                        : (_loading ? 'Updating' : 'Live'),
+                                    style: TextStyle(
+                                      color: _hasError
+                                          ? const Color(0xFFB42318)
+                                          : AppColors.success,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
-                  ),
 
-                  const SizedBox(height: 18),
+                        const SizedBox(height: 18),
 
-                  _MetalRateCard(
-                    title: 'Gold',
-                    icon: Icons.diamond_rounded,
-                    iconColor: const Color(0xFFE3A000),
-                    rate: _mainGoldPrice(),
-                    unit: '/g',
-                    rates: _goldPurities(),
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  _MetalRateCard(
-                    title: 'Silver',
-                    icon: Icons.diamond_rounded,
-                    iconColor: const Color(0xFF92969D),
-                    rate: _mainSilverPrice(),
-                    unit: '/g',
-                    rates: _silverPurities(),
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  const _MetalRateCard(
-                    title: 'Diamond',
-                    icon: Icons.diamond_outlined,
-                    iconColor: Color(0xFF1595ED),
-                    rate: '—',
-                    unit: '/ct',
-                    rates: [
-                      _PurityRate('Natural', '—', '/ct'),
-                      _PurityRate('Lab Grown', '—', '/ct'),
-                    ],
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF2EAFB),
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    child: const Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          Icons.info_outline_rounded,
-                          color: Color(0xFF9476D9),
-                          size: 21,
+                        _MetalRateCard(
+                          title: 'Gold',
+                          icon: Icons.diamond_rounded,
+                          iconColor: const Color(0xFFE3A000),
+                          rate: _mainGoldPrice(),
+                          unit: '/g',
+                          rates: _goldPurities(),
                         ),
-                        SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            'Rates are indicative market rates and may '
-                            'vary based on purity, making charges and '
-                            'local market conditions.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              height: 1.6,
-                              color: AppColors.body,
-                            ),
+
+                        const SizedBox(height: 14),
+
+                        _MetalRateCard(
+                          title: 'Silver',
+                          icon: Icons.diamond_rounded,
+                          iconColor: const Color(0xFF92969D),
+                          rate: _mainSilverPrice(),
+                          unit: '/g',
+                          rates: _silverPurities(),
+                        ),
+
+                        const SizedBox(height: 14),
+
+                        const _MetalRateCard(
+                          title: 'Diamond',
+                          icon: Icons.diamond_outlined,
+                          iconColor: Color(0xFF1595ED),
+                          rate: '—',
+                          unit: '/ct',
+                          rates: [
+                            _PurityRate('Natural', '—', '/ct'),
+                            _PurityRate('Lab Grown', '—', '/ct'),
+                          ],
+                        ),
+
+                        const SizedBox(height: 14),
+
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF2EAFB),
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          child: const Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.info_outline_rounded,
+                                color: Color(0xFF9476D9),
+                                size: 21,
+                              ),
+                              SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'Rates are indicative market rates and may '
+                                  'vary based on purity, making charges and '
+                                  'local market conditions.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    height: 1.6,
+                                    color: AppColors.body,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
                   ),
-                ],
+                ),
               ),
-            ),
-          ),
-        ),
       ),
     );
   }

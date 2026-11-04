@@ -295,24 +295,19 @@ class _TemporarySignupScreenState extends State<TemporarySignupScreen> {
 
               const SizedBox(height: 18),
 
-              Center(
-                child: Image.asset(
-                  'assets/images/jewelsetu_logo.png',
-                  height: 112,
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Padding(
-                      padding: EdgeInsets.all(20),
-                      child: Text(
-                        'JewelSetu',
-                        style: TextStyle(
-                          color: _purple,
-                          fontSize: 30,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    );
-                  },
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: Text(
+                    'JAIWER',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      color: _purple,
+                      fontSize: 38,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 2.0,
+                    ),
+                  ),
                 ),
               ),
 

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -42,11 +43,32 @@ class _AuthGateState extends State<AuthGate> {
   Future<bool> _checkSession() async {
     try {
       final accessToken = await _storage.read(key: 'access_token');
+      if (accessToken == null || accessToken.trim().isEmpty) return false;
 
-      return accessToken != null && accessToken.trim().isNotEmpty;
+      // Decode JWT payload locally to check expiration without network dependency
+      try {
+        final parts = accessToken.split('.');
+        if (parts.length == 3) {
+          final normalized = base64Url.normalize(parts[1]);
+          final payloadString = utf8.decode(base64Url.decode(normalized));
+          final payload = jsonDecode(payloadString);
+          if (payload is Map && payload['exp'] != null) {
+            final expSeconds = (payload['exp'] as num).toInt();
+            final expDate = DateTime.fromMillisecondsSinceEpoch(expSeconds * 1000);
+            if (DateTime.now().isAfter(expDate)) {
+              debugPrint('[AuthGate] JWT access token expired locally.');
+              return false;
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('[AuthGate] JWT local decode error: $e');
+      }
+
+      return true;
     } catch (e) {
       debugPrint('Session check failed: $e');
-      rethrow;
+      return false;
     }
   }
 
