@@ -262,23 +262,17 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
         '${_reminderDate!.month.toString().padLeft(2, '0')}-'
         '${_reminderDate!.day.toString().padLeft(2, '0')}';
 
-    var remainingPaymentToAllocate = _payPerItem ? 0.0 : _overallPaid;
+    final paymentMode = _payPerItem ? 'item_wise' : 'total';
+    const paymentMethod = 'cash';
+
     final payload = <String, dynamic>{
       'name': _nameController.text.trim(),
       'phone_number': _normalizePhoneNumber(_phoneController.text),
       'address': _addressController.text.trim(),
+      'payment_mode': paymentMode,
+      'payment_method': paymentMethod,
+      if (!_payPerItem) 'total_payment': _overallPaid,
       'items': _items.map((item) {
-        // The backend stores amount_paid on each item. In total-payment mode,
-        // allocate the entered payment across items in their displayed order.
-        final itemPaid = _payPerItem
-            ? item.paid
-            : (() {
-          final allocation = remainingPaymentToAllocate
-              .clamp(0, item.total)
-              .toDouble();
-          remainingPaymentToAllocate -= allocation;
-          return allocation;
-        })();
         return <String, dynamic>{
           'item_name': item.name.text.trim(),
           'weight_grams': double.parse(
@@ -288,7 +282,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
             item.rate.text.trim().replaceAll(',', ''),
           ),
           'total_amount': item.total,
-          'amount_paid': itemPaid,
+          if (_payPerItem) 'amount_paid': item.paid,
           'reminder_date': reminderDate,
           'sms_reminder_enabled': _sendSmsReminder,
         };
@@ -337,7 +331,23 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
       if (response.statusCode == 401) {
         message = 'Login session expired. Please log in again.';
       } else if (response.statusCode == 422) {
-        message = serverMessage ?? 'Some customer or item fields are invalid.';
+        if (responseData is Map && responseData['detail'] != null) {
+          final detail = responseData['detail'];
+          if (detail is List) {
+            message = detail.map((e) {
+              if (e is Map) {
+                final loc = (e['loc'] as List?)?.join('.') ?? '';
+                final msg = e['msg'] ?? '';
+                return '$loc: $msg';
+              }
+              return e.toString();
+            }).join(', ');
+          } else {
+            message = detail.toString();
+          }
+        } else {
+          message = 'Some customer or item fields are invalid.';
+        }
       } else {
         message = serverMessage ??
             'Could not save customer (HTTP ${response.statusCode}).';

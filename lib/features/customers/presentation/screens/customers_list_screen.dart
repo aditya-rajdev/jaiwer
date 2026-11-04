@@ -63,20 +63,29 @@ class _CustomersListScreenState extends State<CustomersListScreen> {
 
       if (response.statusCode == 200) {
         final dynamic decoded = jsonDecode(response.body);
-        if (decoded is! List) {
+
+        List rawList = [];
+        if (decoded is Map<String, dynamic>) {
+          final customersList = decoded['customers'];
+          if (customersList is List) {
+            rawList = customersList;
+          }
+        } else if (decoded is List) {
+          rawList = decoded;
+        } else {
           throw const FormatException(
             'Unexpected customers response from server.',
           );
         }
 
-        final parsed = decoded
+        final parsed = rawList
             .whereType<Map>()
             .map((row) {
           final map = Map<String, dynamic>.from(row);
           final name = (map['name'] ?? 'Unknown customer').toString();
           final phone = (map['phone_number'] ?? '').toString();
           final owed = _toDouble(
-            map['amount_owed'] ?? map['baki'] ?? map['due_amount'],
+            map['total_due_amount'] ?? map['amount_owed'] ?? map['baki'] ?? map['due_amount'],
           );
           final id = (map['customer_id'] ?? map['id'] ?? '').toString();
           final initials = _initials(name);
