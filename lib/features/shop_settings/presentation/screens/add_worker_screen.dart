@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 
+import '../../../../config/app_config.dart';
+import '../../../../services/api_client.dart';
 import 'manage_workers_screen.dart';
 import 'roles_permissions_screen.dart';
 
@@ -15,12 +18,15 @@ class _AddWorkerScreenState extends State<AddWorkerScreen> {
   static const Color _background = Color(0xFFFFF9F0);
   static const Color _border = Color(0xFFEDE4D9);
   static const Color _muted = Color(0xFF718096);
+  static const Color _text = Color(0xFF29232D);
 
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController(text: 'Suresh Kumar');
   final _phoneCtrl = TextEditingController(text: '+91 91234 56789');
 
   String _selectedRole = 'Sales & Billing';
+  bool _isSaving = false;
+
   List<String> _assignedPermissions = [
     'Dashboard',
     'Customers',
@@ -34,6 +40,25 @@ class _AddWorkerScreenState extends State<AddWorkerScreen> {
     _phoneCtrl.dispose();
     super.dispose();
   }
+
+  String _normalizePhoneNumber(String input) {
+    var digits = input.trim().replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return input.trim();
+    while (digits.startsWith('0')) {
+      digits = digits.substring(1);
+    }
+    if (digits.length == 10) {
+      return '+91$digits';
+    } else if (digits.length == 12 && digits.startsWith('91')) {
+      return '+$digits';
+    } else if (digits.length >= 8 && digits.length <= 15) {
+      return '+$digits';
+    }
+    return '+$digits';
+  }
+
+  bool _isValidE164(String phone) =>
+      RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(phone);
 
   Future<void> _openSetPermissions() async {
     final updatedPerms = await Navigator.of(context).push<List<String>>(
@@ -53,31 +78,96 @@ class _AddWorkerScreenState extends State<AddWorkerScreen> {
     }
   }
 
-  void _submitAddWorker() {
+  Future<void> _submitAddWorker() async {
+    if (_isSaving) return;
     if (!_formKey.currentState!.validate()) return;
 
+    final formattedPhone = _normalizePhoneNumber(_phoneCtrl.text);
     final name = _nameCtrl.text.trim();
-    final phone = _phoneCtrl.text.trim();
 
-    final newWorker = WorkerModel(
-      id: 'w_${DateTime.now().millisecondsSinceEpoch}',
-      name: name,
-      phone: phone,
-      role: _selectedRole,
-      status: 'Active',
-      joinDate: 'Today',
-      permissions: _assignedPermissions,
-    );
+    setState(() => _isSaving = true);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Worker added successfully!'),
-        backgroundColor: Color(0xFF247A4B),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    try {
+      final payload = {'phone_number': formattedPhone};
+      final uri = Uri.parse(ApiConfig.ownerWorkersUrl);
 
-    Navigator.pop(context, newWorker);
+      final response = await ApiClient.instance.post(
+        uri,
+        headers: const {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode(payload),
+      );
+
+      dynamic responseData;
+      try {
+        responseData = jsonDecode(response.body);
+      } on FormatException {
+        responseData = null;
+      }
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        final id = responseData is Map ? (responseData['id'] ?? '').toString() : 'w_${DateTime.now().millisecondsSinceEpoch}';
+        final status = responseData is Map ? (responseData['status'] ?? 'approved').toString() : 'Active';
+
+        final newWorker = WorkerModel(
+          id: id.isNotEmpty ? id : 'w_${DateTime.now().millisecondsSinceEpoch}',
+          name: name,
+          phone: formattedPhone,
+          role: _selectedRole,
+          status: status.toLowerCase() == 'approved' ? 'Active' : status,
+          joinDate: 'Today',
+          permissions: _assignedPermissions,
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Worker linked successfully via POST /owner/workers!'),
+            backgroundColor: Color(0xFF247A4B),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+
+        Navigator.pop(context, newWorker);
+        return;
+      }
+
+      final serverMessage = responseData is Map
+          ? (responseData['detail'] ?? responseData['message'] ?? responseData['error'])?.toString()
+          : null;
+
+      String errorMessage;
+      if (response.statusCode == 404) {
+        errorMessage = 'Worker account not found for $formattedPhone. Please ask the worker to register on JAIWER first as a "Worker" account.';
+      } else if (response.statusCode == 401) {
+        errorMessage = 'Session expired or non-owner account. Only shop owners can add workers.';
+      } else if (response.statusCode == 422) {
+        errorMessage = 'Invalid phone number format. Enter E.164 phone number e.g. +919876543210.';
+      } else {
+        errorMessage = serverMessage ?? 'Could not link worker (HTTP ${response.statusCode}).';
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMessage),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error adding worker: $e'),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   @override
@@ -107,21 +197,21 @@ class _AddWorkerScreenState extends State<AddWorkerScreen> {
                   alignment: Alignment.bottomRight,
                   children: [
                     Container(
-                      width: 100,
-                      height: 100,
+                      width: 90,
+                      height: 90,
                       decoration: BoxDecoration(
                         color: const Color(0xFFE2D4EE),
                         shape: BoxShape.circle,
                         border: Border.all(color: _border, width: 2),
                       ),
-                      child: const Icon(Icons.person_rounded, color: _primary, size: 60),
+                      child: const Icon(Icons.person_rounded, color: _primary, size: 55),
                     ),
                     CircleAvatar(
-                      radius: 17,
+                      radius: 16,
                       backgroundColor: _primary,
                       child: IconButton(
                         padding: EdgeInsets.zero,
-                        icon: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 16),
+                        icon: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 15),
                         onPressed: () {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('Worker photo picker ready')),
@@ -133,7 +223,31 @@ class _AddWorkerScreenState extends State<AddWorkerScreen> {
                 ),
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
+
+              // Info Guidance Banner
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF2ECFA),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFE2D4EE)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline_rounded, color: _primary, size: 20),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Important: The worker must already have a registered JAIWER account with this phone number (account_type = worker).',
+                        style: TextStyle(fontSize: 11, color: _text, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 18),
 
               // Form Inputs
               TextFormField(
@@ -154,7 +268,8 @@ class _AddWorkerScreenState extends State<AddWorkerScreen> {
                 controller: _phoneCtrl,
                 keyboardType: TextInputType.phone,
                 decoration: InputDecoration(
-                  labelText: 'Phone Number *',
+                  labelText: 'Phone Number (E.164) *',
+                  hintText: '+919876543210',
                   prefixIcon: const Icon(Icons.phone_outlined, color: _primary),
                   fillColor: Colors.white,
                   filled: true,
@@ -162,8 +277,8 @@ class _AddWorkerScreenState extends State<AddWorkerScreen> {
                 ),
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) return 'Phone Number is required';
-                  final digits = v.replaceAll(RegExp(r'\D'), '');
-                  if (digits.length < 10) return 'Enter a valid 10-digit phone number';
+                  final norm = _normalizePhoneNumber(v);
+                  if (!_isValidE164(norm)) return 'Enter valid phone number e.g. +919876543210';
                   return null;
                 },
               ),
@@ -249,14 +364,20 @@ class _AddWorkerScreenState extends State<AddWorkerScreen> {
 
               SizedBox(
                 height: 52,
-                child: ElevatedButton(
-                  onPressed: _submitAddWorker,
+                child: ElevatedButton.icon(
+                  onPressed: _isSaving ? null : _submitAddWorker,
+                  icon: _isSaving
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.group_add_rounded, color: Colors.white, size: 22),
+                  label: Text(
+                    _isSaving ? 'Linking Worker...' : 'Add Worker (POST /owner/workers)',
+                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _primary,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     elevation: 0,
                   ),
-                  child: const Text('Add Worker', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
                 ),
               ),
             ],

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../services/shop_context_service.dart';
 import 'add_worker_screen.dart';
 import 'worker_details_screen.dart';
 
@@ -78,22 +79,40 @@ class _ManageWorkersScreenState extends State<ManageWorkersScreen> {
   @override
   void initState() {
     super.initState();
+    ShopContextService.instance.addListener(_onShopContextChanged);
     _loadWorkers();
+  }
+
+  @override
+  void dispose() {
+    ShopContextService.instance.removeListener(_onShopContextChanged);
+    super.dispose();
+  }
+
+  void _onShopContextChanged() {
+    if (mounted) {
+      _loadWorkers();
+    }
+  }
+
+  String get _shopWorkerKey {
+    final shopId = ShopContextService.instance.selectedShopId;
+    return 'shop_${shopId}_workers_list';
   }
 
   Future<void> _loadWorkers() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString('shop_workers_list');
+    final jsonStr = prefs.getString(_shopWorkerKey);
 
     if (jsonStr != null && jsonStr.isNotEmpty) {
       try {
         final List decoded = jsonDecode(jsonStr);
         _workers = decoded.map((item) => WorkerModel.fromJson(Map<String, dynamic>.from(item))).toList();
       } catch (_) {
-        _workers = _defaultWorkers();
+        _workers = _defaultWorkersForActiveShop();
       }
     } else {
-      _workers = _defaultWorkers();
+      _workers = _defaultWorkersForActiveShop();
       await _saveWorkersLocally();
     }
 
@@ -101,34 +120,39 @@ class _ManageWorkersScreenState extends State<ManageWorkersScreen> {
     setState(() => _isLoading = false);
   }
 
-  List<WorkerModel> _defaultWorkers() {
+  List<WorkerModel> _defaultWorkersForActiveShop() {
+    final shopId = ShopContextService.instance.selectedShopId;
+    if (shopId.contains('gaya')) {
+      return [
+        WorkerModel(
+          id: 'w_gaya_1',
+          name: 'Vikash Kumar',
+          phone: '+91 91234 56789',
+          role: 'Sales & Billing',
+          status: 'Active',
+          joinDate: '20 Oct 2026',
+          permissions: ['Dashboard', 'Customers', 'Payments', 'Gold Rate'],
+        ),
+      ];
+    }
     return [
       WorkerModel(
-        id: 'w_1',
-        name: 'Vikash Kumar',
-        phone: '+91 91234 56789',
-        role: 'Sales & Billing',
-        status: 'Active',
-        joinDate: '20 Oct 2026',
-        permissions: ['Dashboard', 'Customers', 'Payments', 'Gold Rate'],
-      ),
-      WorkerModel(
-        id: 'w_2',
-        name: 'Rohit Singh',
+        id: 'w_patna_1',
+        name: 'Rahul Sharma',
         phone: '+91 98765 43210',
-        role: 'Inventory Manager',
+        role: 'Shop Manager',
         status: 'Active',
         joinDate: '15 Sep 2026',
-        permissions: ['Dashboard', 'Inventory', 'Suppliers', 'Gold Rate'],
+        permissions: ['Dashboard', 'Customers', 'Payments', 'Inventory', 'Suppliers', 'Gold Rate'],
       ),
       WorkerModel(
-        id: 'w_3',
-        name: 'Ankit Kumar',
+        id: 'w_patna_2',
+        name: 'Amit Kumar',
         phone: '+91 95555 12345',
-        role: 'View Only',
-        status: 'Inactive',
+        role: 'Sales & Billing',
+        status: 'Active',
         joinDate: '01 Aug 2026',
-        permissions: ['Dashboard', 'Gold Rate'],
+        permissions: ['Dashboard', 'Customers', 'Payments', 'Gold Rate'],
       ),
     ];
   }
@@ -136,7 +160,7 @@ class _ManageWorkersScreenState extends State<ManageWorkersScreen> {
   Future<void> _saveWorkersLocally() async {
     final prefs = await SharedPreferences.getInstance();
     final jsonStr = jsonEncode(_workers.map((w) => w.toJson()).toList());
-    await prefs.setString('shop_workers_list', jsonStr);
+    await prefs.setString(_shopWorkerKey, jsonStr);
   }
 
   int get _totalWorkers => _workers.length;
@@ -172,6 +196,9 @@ class _ManageWorkersScreenState extends State<ManageWorkersScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final currentShop = ShopContextService.instance.currentShop;
+    final activeBranchName = currentShop?.branch ?? 'Active Shop';
+
     return Scaffold(
       backgroundColor: _background,
       appBar: AppBar(
@@ -182,11 +209,11 @@ class _ManageWorkersScreenState extends State<ManageWorkersScreen> {
           onPressed: () => Navigator.pop(context),
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _primary, size: 20),
         ),
-        title: const Column(
+        title: Column(
           children: [
-            Text('Manage Workers', style: TextStyle(color: _primary, fontSize: 19, fontWeight: FontWeight.w700)),
-            SizedBox(height: 2),
-            Text('Add team members and manage their access', style: TextStyle(color: _muted, fontSize: 12)),
+            const Text('Manage Workers', style: TextStyle(color: _primary, fontSize: 19, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text('Shop: $activeBranchName', style: const TextStyle(color: _muted, fontSize: 12)),
           ],
         ),
         centerTitle: true,
@@ -212,6 +239,30 @@ class _ManageWorkersScreenState extends State<ManageWorkersScreen> {
             : ListView(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                 children: [
+                  // Active Shop Context Badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF2EAFB),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFE2D4EE)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.storefront_rounded, color: _primary, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Active Shop: ${currentShop?.displayName ?? 'Default Shop'}',
+                            style: const TextStyle(color: _primary, fontSize: 13, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
                   // Summary Cards Row
                   Row(
                     children: [
@@ -250,10 +301,29 @@ class _ManageWorkersScreenState extends State<ManageWorkersScreen> {
                   const SizedBox(height: 20),
 
                   // Worker List
-                  for (final worker in _workers) ...[
-                    _workerCard(worker),
-                    const SizedBox(height: 12),
-                  ],
+                  if (_workers.isEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(28),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: _border),
+                      ),
+                      child: const Column(
+                        children: [
+                          Icon(Icons.person_off_outlined, color: _muted, size: 40),
+                          SizedBox(height: 10),
+                          Text('No workers in this branch', style: TextStyle(color: _primary, fontWeight: FontWeight.bold, fontSize: 15)),
+                          SizedBox(height: 4),
+                          Text('Tap + to add workers to this shop.', style: TextStyle(color: _muted, fontSize: 12)),
+                        ],
+                      ),
+                    )
+                  else
+                    for (final worker in _workers) ...[
+                      _workerCard(worker),
+                      const SizedBox(height: 12),
+                    ],
                 ],
               ),
       ),

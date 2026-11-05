@@ -2,11 +2,11 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../../../customer_ledger/presentation/screens/login_screen.dart';
 import '../../../dashboard/presentation/screens/dashboard_screen.dart';
+import '../../../../services/api_client.dart';
 
 
 class TemporarySignupScreen extends StatefulWidget {
@@ -159,15 +159,6 @@ class _TemporarySignupScreenState extends State<TemporarySignupScreen> {
           throw Exception('Verification succeeded but access token was missing.');
         }
 
-        const storage = FlutterSecureStorage();
-        await storage.write(key: 'access_token', value: accessToken);
-        if (refreshToken != null && refreshToken.isNotEmpty) {
-          await storage.write(key: 'refresh_token', value: refreshToken);
-        }
-        if (responseData['token_type'] != null) {
-          await storage.write(key: 'token_type', value: responseData['token_type'].toString());
-        }
-
         final profile = responseData['profile'] is Map
             ? Map<String, dynamic>.from(responseData['profile'] as Map)
             : <String, dynamic>{};
@@ -179,29 +170,30 @@ class _TemporarySignupScreenState extends State<TemporarySignupScreen> {
         final ownerReferenceId = profile['owner_reference_id'] ?? responseData['owner_reference_id'];
         final shopName = profile['shop_name'] ?? responseData['shop_name'];
 
-        if (name.toString().trim().isNotEmpty) {
-          await storage.write(key: 'user_name', value: name.toString());
-        }
-        if (email.toString().trim().isNotEmpty) {
-          await storage.write(key: 'user_email', value: email.toString());
-        }
-        if (phone != null && phone.toString().trim().isNotEmpty) {
-          await storage.write(key: 'user_phone', value: phone.toString());
-        }
-        if (accountType != null && accountType.toString().trim().isNotEmpty) {
-          await storage.write(key: 'account_type', value: accountType.toString());
-        }
-        if (userId != null && userId.toString().trim().isNotEmpty) {
-          await storage.write(key: 'user_id', value: userId.toString());
-        }
-        if (ownerReferenceId != null && ownerReferenceId.toString().trim().isNotEmpty) {
-          await storage.write(key: 'owner_reference_id', value: ownerReferenceId.toString());
-        }
-        if (shopName != null && shopName.toString().trim().isNotEmpty) {
-          await storage.write(key: 'shop_name', value: shopName.toString());
+        final profileMap = <String, String>{};
+        if (name != null) profileMap['user_name'] = name.toString();
+        if (email != null) profileMap['user_email'] = email.toString();
+        if (phone != null) profileMap['user_phone'] = phone.toString();
+        if (accountType != null) profileMap['account_type'] = accountType.toString();
+        if (userId != null) profileMap['user_id'] = userId.toString();
+        if (ownerReferenceId != null) profileMap['owner_reference_id'] = ownerReferenceId.toString();
+        if (shopName != null) profileMap['shop_name'] = shopName.toString();
+
+        final saved = await ApiClient.instance.saveAuthSession(
+          accessToken: accessToken,
+          refreshToken: refreshToken,
+          tokenType: responseData['token_type']?.toString(),
+          userProfile: profileMap,
+        );
+
+        if (!saved) {
+          if (!mounted) return;
+          _showTemporaryMessage('Session could not be established. Please try again.');
+          return;
         }
 
         final message = (responseData['message'] ?? 'OTP verified successfully.').toString();
+        if (!mounted) return;
         _showTemporaryMessage(message);
 
         Navigator.of(context).pushAndRemoveUntil(

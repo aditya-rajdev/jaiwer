@@ -38,6 +38,7 @@ class _CustomerItem {
     required this.totalAmount,
     required this.amountPaid,
     required this.dueAmount,
+    this.receiver,
     this.createdAt,
   });
 
@@ -48,6 +49,7 @@ class _CustomerItem {
   final double totalAmount;
   final double amountPaid;
   final double dueAmount;
+  final String? receiver;
   final DateTime? createdAt;
 }
 
@@ -282,6 +284,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
       final total = _toDouble(m['total_amount']);
       final paid = _toDouble(m['amount_paid']);
       final due = _toDouble(m['due_amount']);
+      final receiver = m['receiver']?.toString().trim();
 
       DateTime? createdAt;
       if (m['created_at'] != null) {
@@ -296,6 +299,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
         totalAmount: total,
         amountPaid: paid,
         dueAmount: due,
+        receiver: receiver,
         createdAt: createdAt,
       );
     }).toList();
@@ -318,7 +322,11 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   Future<void> _addNewItem() async {
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => const NewCustomerScreen(),
+        builder: (_) => NewCustomerScreen(
+          existingCustomerName: widget.customer.name,
+          existingCustomerPhone: widget.customer.phone,
+          existingCustomerAddress: _address,
+        ),
       ),
     );
     if (mounted && result == true) {
@@ -513,7 +521,10 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     final rateText = item.ratePerGram != null && item.ratePerGram! > 0
         ? 'Rate: ₹ ${_money(item.ratePerGram!.round())}/g'
         : 'Rate: —';
-    final metaText = 'Weight: ${item.weightGrams.toStringAsFixed(1)} g';
+    var metaText = 'Weight: ${item.weightGrams.toStringAsFixed(1)} g';
+    if (item.receiver != null && item.receiver!.trim().isNotEmpty) {
+      metaText += '\nNote: ${item.receiver!.trim()}';
+    }
 
     return _transactionItem(
       day,

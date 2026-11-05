@@ -7,11 +7,12 @@ import '../../../../core/theme/app_text_styles.dart';
 import '../../../../core/widgets/skeleton_widgets.dart';
 import '../../../../services/connectivity_service.dart';
 import '../../../../services/notification_service.dart';
+import '../../../../services/api_client.dart';
+import '../../../../services/shop_context_service.dart';
 import '../../../customers/presentation/screens/new_customer_screen.dart';
 import '../../../customers/presentation/screens/customers_list_screen.dart';
 import '../../../suppliers/presentation/screens/suppliers_list_screen.dart';
 import '../../../metal_rates/presentation/screens/metal_rates_screen.dart';
-import '../../../onboarding/presentation/screens/role_selection_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
 import '../../../payments/presentation/screens/payments_screen.dart';
 import '../../../shop_settings/presentation/screens/shop_settings_screen.dart';
@@ -32,6 +33,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    ShopContextService.instance.initialize().then((_) {
+      if (mounted) setState(() {});
+    });
+    ShopContextService.instance.addListener(_onShopContextChanged);
     _isOffline = !ConnectivityService.instance.isOnline;
     _connectivitySub = ConnectivityService.instance.onConnectivityChanged.listen((isOnline) {
       if (mounted) {
@@ -42,12 +47,114 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  void _onShopContextChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    ShopContextService.instance.removeListener(_onShopContextChanged);
     _connectivitySub?.cancel();
     super.dispose();
   }
-  int _selectedTab = 0;
+
+  void _showShopSwitcherSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) {
+        final shops = ShopContextService.instance.shops;
+        final currentShopId = ShopContextService.instance.selectedShopId;
+
+        return Container(
+          padding: const EdgeInsets.all(22),
+          decoration: const BoxDecoration(
+            color: AppColors.background,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Select Active Shop', style: TextStyle(color: AppColors.primary, fontSize: 20, fontWeight: FontWeight.bold)),
+                  IconButton(
+                    onPressed: () => Navigator.pop(sheetCtx),
+                    icon: const Icon(Icons.close_rounded, color: AppColors.primary),
+                  ),
+                ],
+              ),
+              const Divider(color: AppColors.border),
+              const SizedBox(height: 12),
+              for (final shop in shops) ...[
+                InkWell(
+                  onTap: () async {
+                    await ShopContextService.instance.switchShop(shop.id);
+                    if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                    if (mounted) {
+                      setState(() {});
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Switched to ${shop.displayName}'),
+                          backgroundColor: const Color(0xFF247A4B),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(16),
+                  child: Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: shop.id == currentShopId ? const Color(0xFFF2EAFB) : Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: shop.id == currentShopId ? AppColors.primary : AppColors.border,
+                        width: shop.id == currentShopId ? 1.8 : 1.0,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: shop.id == currentShopId ? AppColors.primary : const Color(0xFFFFF0D6),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.storefront_rounded,
+                            color: shop.id == currentShopId ? Colors.white : const Color(0xFFB8860B),
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(shop.displayName, style: const TextStyle(color: AppColors.primary, fontSize: 15, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 2),
+                              Text(shop.address, style: const TextStyle(color: AppColors.body, fontSize: 11)),
+                            ],
+                          ),
+                        ),
+                        if (shop.id == currentShopId)
+                          const Icon(Icons.check_circle_rounded, color: AppColors.success, size: 22),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
@@ -80,27 +187,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _logout() async {
-    const storage = FlutterSecureStorage();
-    await storage.delete(key: 'access_token');
-    await storage.delete(key: 'refresh_token');
-    await storage.delete(key: 'token_type');
-    await storage.delete(key: 'user_name');
-    await storage.delete(key: 'user_email');
-    await storage.delete(key: 'user_phone');
-    await storage.delete(key: 'account_type');
-    await storage.delete(key: 'user_id');
-    await storage.delete(key: 'owner_reference_id');
-    await storage.delete(key: 'shop_name');
+    await ApiClient.instance.handleManualLogout();
     await NotificationService.instance.clearToken();
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(builder: (_) => const RoleSelectionScreen()),
-          (route) => false,
-    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final activeShopName = ShopContextService.instance.currentShop?.displayName ?? 'Jewellery Shop Management';
+
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: AppColors.background,
@@ -133,12 +227,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ],
               ),
             ),
-            const Text(
-              'Jewellery Shop Management',
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.body,
-                fontWeight: FontWeight.w400,
+            InkWell(
+              onTap: _showShopSwitcherSheet,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      activeShopName,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.body,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: AppColors.primary),
+                  ],
+                ),
               ),
             ),
           ],

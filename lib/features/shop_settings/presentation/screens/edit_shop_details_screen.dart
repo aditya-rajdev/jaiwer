@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../../config/app_config.dart';
 import '../../../../services/api_client.dart';
+import '../../../../services/shop_context_service.dart';
 
 class EditShopDetailsScreen extends StatefulWidget {
   const EditShopDetailsScreen({super.key});
@@ -21,10 +22,11 @@ class _EditShopDetailsScreenState extends State<EditShopDetailsScreen> {
   static const Color _muted = Color(0xFF718096);
 
   final _formKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController(text: 'Sharma Jewellers');
-  final _gstCtrl = TextEditingController(text: '10ABCDE1234F1Z5');
+  final _nameCtrl = TextEditingController(text: 'Raj Jewellery');
+  final _branchCtrl = TextEditingController(text: 'Patna Main Branch');
+  final _gstCtrl = TextEditingController(text: '10AAAAA0000A1Z5');
   final _phoneCtrl = TextEditingController(text: '+91 98765 43210');
-  final _addressCtrl = TextEditingController(text: 'Gandhi Chowk, Patna, Bihar – 800001');
+  final _addressCtrl = TextEditingController(text: 'Boring Road, Patna, Bihar – 800001');
 
   String _shopType = 'Gold, Silver & Diamond';
   bool _isSaving = false;
@@ -38,15 +40,24 @@ class _EditShopDetailsScreenState extends State<EditShopDetailsScreen> {
 
   Future<void> _loadExistingDetails() async {
     try {
-      final name = await _storage.read(key: 'shop_name');
-      final phone = await _storage.read(key: 'user_phone');
-      final address = await _storage.read(key: 'shop_address');
-      final gst = await _storage.read(key: 'shop_gstin');
+      final currentShop = ShopContextService.instance.currentShop;
+      if (currentShop != null) {
+        _nameCtrl.text = currentShop.name;
+        _branchCtrl.text = currentShop.branch;
+        _addressCtrl.text = currentShop.address;
+        _phoneCtrl.text = currentShop.phone;
+        _gstCtrl.text = currentShop.gstin;
+      } else {
+        final name = await _storage.read(key: 'shop_name');
+        final phone = await _storage.read(key: 'user_phone');
+        final address = await _storage.read(key: 'shop_address');
+        final gst = await _storage.read(key: 'shop_gstin');
 
-      if (name != null && name.trim().isNotEmpty) _nameCtrl.text = name.trim();
-      if (phone != null && phone.trim().isNotEmpty) _phoneCtrl.text = phone.trim();
-      if (address != null && address.trim().isNotEmpty) _addressCtrl.text = address.trim();
-      if (gst != null && gst.trim().isNotEmpty) _gstCtrl.text = gst.trim();
+        if (name != null && name.trim().isNotEmpty) _nameCtrl.text = name.trim();
+        if (phone != null && phone.trim().isNotEmpty) _phoneCtrl.text = phone.trim();
+        if (address != null && address.trim().isNotEmpty) _addressCtrl.text = address.trim();
+        if (gst != null && gst.trim().isNotEmpty) _gstCtrl.text = gst.trim();
+      }
 
       if (!mounted) return;
       setState(() => _isLoading = false);
@@ -60,22 +71,33 @@ class _EditShopDetailsScreenState extends State<EditShopDetailsScreen> {
 
     setState(() => _isSaving = true);
     final name = _nameCtrl.text.trim();
+    final branch = _branchCtrl.text.trim();
     final gst = _gstCtrl.text.trim();
     final phone = _phoneCtrl.text.trim();
     final address = _addressCtrl.text.trim();
 
     try {
-      // 1. Persist locally in secure storage
-      await _storage.write(key: 'shop_name', value: name);
-      await _storage.write(key: 'shop_type', value: _shopType);
-      await _storage.write(key: 'shop_gstin', value: gst);
-      await _storage.write(key: 'user_phone', value: phone);
-      await _storage.write(key: 'shop_address', value: address);
+      final currentShop = ShopContextService.instance.currentShop;
+      final shopId = currentShop?.id ?? 'shop_patna';
 
-      // 2. Try PATCH /shop-profile
+      final updatedShop = ShopModel(
+        id: shopId,
+        name: name,
+        branch: branch,
+        address: address,
+        phone: phone,
+        gstin: gst,
+        isPrimary: currentShop?.isPrimary ?? true,
+      );
+
+      await ShopContextService.instance.switchShop(updatedShop.id);
+      await _storage.write(key: 'shop_name', value: updatedShop.displayName);
+      await _storage.write(key: 'shop_address', value: address);
+      await _storage.write(key: 'shop_gstin', value: gst);
+
       try {
         final payload = {
-          'shop_name': name,
+          'shop_name': updatedShop.displayName,
           'shop_address': address,
           'gstin': gst.isNotEmpty ? gst : null,
         };
@@ -89,7 +111,7 @@ class _EditShopDetailsScreenState extends State<EditShopDetailsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Shop details saved successfully!'),
+          content: Text('Shop branch details saved successfully!'),
           backgroundColor: Color(0xFF247A4B),
           behavior: SnackBarBehavior.floating,
         ),
@@ -110,6 +132,8 @@ class _EditShopDetailsScreenState extends State<EditShopDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final activeBranchName = ShopContextService.instance.currentShop?.displayName ?? 'Active Shop';
+
     return Scaffold(
       backgroundColor: _background,
       appBar: AppBar(
@@ -120,7 +144,13 @@ class _EditShopDetailsScreenState extends State<EditShopDetailsScreen> {
           onPressed: () => Navigator.pop(context),
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _primary, size: 20),
         ),
-        title: const Text('Edit Shop Details', style: TextStyle(color: _primary, fontSize: 19, fontWeight: FontWeight.w700)),
+        title: Column(
+          children: [
+            const Text('Edit Shop Details', style: TextStyle(color: _primary, fontSize: 19, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(activeBranchName, style: const TextStyle(color: _muted, fontSize: 11)),
+          ],
+        ),
         centerTitle: true,
       ),
       body: SafeArea(
@@ -165,7 +195,7 @@ class _EditShopDetailsScreenState extends State<EditShopDetailsScreen> {
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            _nameCtrl.text.isEmpty ? 'Sharma Jewellers' : _nameCtrl.text,
+                            _nameCtrl.text.isEmpty ? 'Raj Jewellery' : '${_nameCtrl.text} (${_branchCtrl.text})',
                             style: const TextStyle(color: _primary, fontSize: 20, fontWeight: FontWeight.w700),
                           ),
                           const SizedBox(height: 4),
@@ -188,6 +218,21 @@ class _EditShopDetailsScreenState extends State<EditShopDetailsScreen> {
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: _border)),
                       ),
                       validator: (v) => (v == null || v.trim().isEmpty) ? 'Shop name is required' : null,
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    TextFormField(
+                      controller: _branchCtrl,
+                      onChanged: (_) => setState(() {}),
+                      decoration: InputDecoration(
+                        labelText: 'Branch Name *',
+                        prefixIcon: const Icon(Icons.business_outlined, color: _primary),
+                        fillColor: Colors.white,
+                        filled: true,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: _border)),
+                      ),
+                      validator: (v) => (v == null || v.trim().isEmpty) ? 'Branch name is required' : null,
                     ),
 
                     const SizedBox(height: 16),
@@ -264,7 +309,7 @@ class _EditShopDetailsScreenState extends State<EditShopDetailsScreen> {
                             ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                             : const Icon(Icons.save_rounded, color: Colors.white, size: 20),
                         label: Text(
-                          _isSaving ? 'Saving...' : 'Save Changes',
+                          _isSaving ? 'Saving...' : 'Save Branch Details',
                           style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
                         ),
                         style: ElevatedButton.styleFrom(

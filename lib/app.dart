@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'core/theme/app_theme.dart';
 import 'features/dashboard/presentation/screens/dashboard_screen.dart';
 import 'features/onboarding/presentation/screens/role_selection_screen.dart';
+import 'services/api_client.dart';
 import 'services/notification_service.dart';
 
 class JewelSetuApp extends StatelessWidget {
@@ -29,23 +30,71 @@ class AuthGate extends StatefulWidget {
   State<AuthGate> createState() => _AuthGateState();
 }
 
-class _AuthGateState extends State<AuthGate> {
+class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
 
   late Future<bool> _sessionFuture;
+  Future<bool>? _inFlightCheckSession;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _sessionFuture = _checkSession();
   }
 
-  Future<bool> _checkSession() async {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _inFlightCheckSession == null) {
+      debugPrint('[AuthGate] App resumed from background. Verifying session...');
+      if (mounted) {
+        setState(() {
+          _sessionFuture = _checkSession();
+        });
+      }
+    }
+  }
+
+  Future<bool> _checkSession() {
+    if (_inFlightCheckSession != null) {
+      debugPrint('[AuthGate] Reusing in-flight session check Future.');
+      return _inFlightCheckSession!;
+    }
+    _inFlightCheckSession = _executeCheckSession().whenComplete(() {
+      _inFlightCheckSession = null;
+    });
+    return _inFlightCheckSession!;
+  }
+
+  Future<bool> _executeCheckSession() async {
+    final startEpoch = ApiClient.instance.sessionEpoch;
+
     try {
       final accessToken = await _storage.read(key: 'access_token');
-      if (accessToken == null || accessToken.trim().isEmpty) return false;
+      if (ApiClient.instance.sessionEpoch != startEpoch) return false;
 
-      // Decode JWT payload locally to check expiration without network dependency
+      final refreshToken = await _storage.read(key: 'refresh_token');
+      if (ApiClient.instance.sessionEpoch != startEpoch) return false;
+
+      if (accessToken == null || accessToken.trim().isEmpty) {
+        if (refreshToken == null || refreshToken.trim().isEmpty) {
+          return false;
+        }
+        final refreshed = await ApiClient.instance.refreshAccessToken();
+        if (ApiClient.instance.sessionEpoch != startEpoch) return false;
+        if (refreshed) return true;
+        final remainingRefreshToken = await _storage.read(key: 'refresh_token');
+        if (ApiClient.instance.sessionEpoch != startEpoch) return false;
+        return remainingRefreshToken != null && remainingRefreshToken.trim().isNotEmpty;
+      }
+
+      bool isAccessTokenExpired = false;
       try {
         final parts = accessToken.split('.');
         if (parts.length == 3) {
@@ -56,8 +105,7 @@ class _AuthGateState extends State<AuthGate> {
             final expSeconds = (payload['exp'] as num).toInt();
             final expDate = DateTime.fromMillisecondsSinceEpoch(expSeconds * 1000);
             if (DateTime.now().isAfter(expDate)) {
-              debugPrint('[AuthGate] JWT access token expired locally.');
-              return false;
+              isAccessTokenExpired = true;
             }
           }
         }
@@ -65,10 +113,34 @@ class _AuthGateState extends State<AuthGate> {
         debugPrint('[AuthGate] JWT local decode error: $e');
       }
 
+      if (ApiClient.instance.sessionEpoch != startEpoch) return false;
+
+      if (isAccessTokenExpired) {
+        debugPrint('[AuthGate] Access token expired locally. Attempting background token refresh...');
+        if (refreshToken != null && refreshToken.trim().isNotEmpty) {
+          final refreshed = await ApiClient.instance.refreshAccessToken();
+          if (ApiClient.instance.sessionEpoch != startEpoch) return false;
+          if (refreshed) {
+            return true;
+          }
+          final remainingRefreshToken = await _storage.read(key: 'refresh_token');
+          if (ApiClient.instance.sessionEpoch != startEpoch) return false;
+          if (remainingRefreshToken != null && remainingRefreshToken.trim().isNotEmpty) {
+            debugPrint('[AuthGate] Refresh failed due to network/offline. Retaining session.');
+            return true;
+          }
+        }
+        return false;
+      }
+
+      if (ApiClient.instance.sessionEpoch != startEpoch) return false;
       return true;
     } catch (e) {
       debugPrint('Session check failed: $e');
-      return false;
+      if (ApiClient.instance.sessionEpoch != startEpoch) return false;
+      final refreshToken = await _storage.read(key: 'refresh_token');
+      if (ApiClient.instance.sessionEpoch != startEpoch) return false;
+      return refreshToken != null && refreshToken.trim().isNotEmpty;
     }
   }
 

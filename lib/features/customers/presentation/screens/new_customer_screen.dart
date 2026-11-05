@@ -1,17 +1,33 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:url_launcher/url_launcher.dart' as url_launcher;
 
 import '../../../../config/app_config.dart';
 import '../../../../services/api_client.dart';
+import '../../../shop_settings/presentation/screens/shop_settings_screen.dart';
 
-/// Add New Entry screen with support for multiple jewellery items.
-/// Replace lib/features/customers/presentation/screens/new_customer_screen.dart.
+/// Add New Entry / Add New Item screen with support for multiple jewellery items,
+/// existing customer item additions with receiver notes, and PDF bill downloads.
 class NewCustomerScreen extends StatefulWidget {
-  const NewCustomerScreen({super.key, this.isSupplier = false});
+  const NewCustomerScreen({
+    super.key,
+    this.isSupplier = false,
+    this.existingCustomerName,
+    this.existingCustomerPhone,
+    this.existingCustomerAddress,
+  });
+
   final bool isSupplier;
+  final String? existingCustomerName;
+  final String? existingCustomerPhone;
+  final String? existingCustomerAddress;
+
+  bool get isExistingCustomer =>
+      existingCustomerName != null && existingCustomerName!.trim().isNotEmpty;
 
   @override
   State<NewCustomerScreen> createState() => _NewCustomerScreenState();
@@ -89,9 +105,12 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
 
   final _formKey = GlobalKey<FormState>();
   bool _isSaving = false;
+  bool _isDownloadingPdf = false;
+
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _addressController = TextEditingController();
+  final _receiverController = TextEditingController();
   final _overallPaidController = TextEditingController(text: '0');
   final List<_JewelleryItem> _items = [];
   bool _payPerItem = true;
@@ -99,7 +118,6 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
   bool _sendSmsReminder = false;
   String _language = 'English';
 
-  // Backend expects E.164 format matching ^\+[1-9]\d{7,14}$, e.g. +919876543210.
   String _normalizePhoneNumber(String input) {
     var digits = input.trim().replaceAll(RegExp(r'\D'), '');
     if (digits.isEmpty) return input.trim();
@@ -133,6 +151,11 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.isExistingCustomer) {
+      _nameController.text = widget.existingCustomerName!;
+      _phoneController.text = widget.existingCustomerPhone ?? '';
+      _addressController.text = widget.existingCustomerAddress ?? '';
+    }
     _items.add(_newItem());
     _overallPaidController.addListener(_refresh);
   }
@@ -147,10 +170,12 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
     if (mounted) setState(() {});
   }
 
-  void _addItem() => setState(() => _items.add(_newItem()));
+  void _addItem() {
+    setState(() => _items.add(_newItem()));
+  }
 
   void _removeItem(int index) {
-    if (_items.length == 1) {
+    if (_items.length <= 1) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('At least one item is required.')),
       );
@@ -164,6 +189,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
     _nameController.dispose();
     _phoneController.dispose();
     _addressController.dispose();
+    _receiverController.dispose();
     _overallPaidController.dispose();
     for (final item in _items) {
       item.dispose();
@@ -192,40 +218,190 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
     if (selected != null && mounted) setState(() => _reminderDate = selected);
   }
 
-  Future<void> _saveEntry() async {
-    if (_isSaving) return;
-    if (!_formKey.currentState!.validate()) return;
+  Future<void> _downloadAndSaveReceiptPdf(String? txId) async {
+    if (txId == null || txId.trim().isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Customer saved! No PDF bill generated as no transaction ID was created for this payment.'),
+          backgroundColor: Color(0xFF247A4B),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      Navigator.of(context).maybePop(true);
+      return;
+    }
 
-    if (_payPerItem) {
-      for (var i = 0; i < _items.length; i++) {
-        final item = _items[i];
-        if (item.paid < 0) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Enter a valid amount paid for item ${i + 1}.')),
-          );
-          return;
-        }
-        if (item.paid > item.total) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Amount paid for item ${i + 1} cannot exceed its total amount.',
+    try {
+      final receiptUri = Uri.parse('${ApiConfig.baseUrl}/transactions/$txId/receipt');
+      final response = await ApiClient.instance.get(
+        receiptUri,
+        headers: const {'Accept': 'application/pdf'},
+      );
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final pdfBytes = response.bodyBytes;
+        if (pdfBytes.isNotEmpty) {
+          final filePath = await _savePdfToDevice(pdfBytes, txId);
+          final savedFile = File(filePath);
+
+          if (savedFile.existsSync() && savedFile.lengthSync() > 0) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Customer saved & PDF bill downloaded to $filePath!'),
+                backgroundColor: const Color(0xFF247A4B),
+                behavior: SnackBarBehavior.floating,
+                action: SnackBarAction(
+                  label: 'OPEN',
+                  textColor: Colors.white,
+                  onPressed: () {
+                    _openPdfFile(filePath);
+                  },
+                ),
               ),
-            ),
-          );
-          return;
+            );
+            Navigator.of(context).maybePop(true);
+            return;
+          }
         }
       }
-    } else {
-      if (_overallPaid < 0 || _overallPaid > _totalAmount) {
+
+      dynamic errorData;
+      try {
+        errorData = jsonDecode(response.body);
+      } catch (_) {}
+
+      String errorMsg = 'Failed to download PDF bill (HTTP ${response.statusCode}).';
+      List<String> missingFields = [];
+
+      if (response.statusCode == 409) {
+        if (errorData is Map && errorData['detail'] is Map) {
+          final detailMap = Map<String, dynamic>.from(errorData['detail'] as Map);
+          if (detailMap['missing_fields'] is List) {
+            missingFields = (detailMap['missing_fields'] as List).map((e) => e.toString()).toList();
+          }
+        }
+
+        if (missingFields.isEmpty) {
+          try {
+            final compRes = await ApiClient.instance.get(
+              Uri.parse('${ApiConfig.baseUrl}/shop-profile/completion'),
+            );
+            if (compRes.statusCode >= 200 && compRes.statusCode < 300) {
+              final compData = jsonDecode(compRes.body);
+              if (compData is Map && compData['missing_fields'] is List) {
+                missingFields = (compData['missing_fields'] as List).map((e) => e.toString()).toList();
+              }
+            }
+          } catch (_) {}
+        }
+
+        final fieldText = missingFields.isNotEmpty
+            ? missingFields.join(', ')
+            : 'shop name, address, or phone number';
+
+        errorMsg = 'Customer entry saved! Bill not generated: Shop profile is incomplete (Missing: $fieldText).';
+
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Total amount paid must be between ₹0 and the total amount.'),
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: const Color(0xFFB42318),
+            duration: const Duration(seconds: 8),
+            behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'SHOP SETTINGS',
+              textColor: Colors.amber,
+              onPressed: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ShopSettingsScreen(),
+                  ),
+                );
+                if (mounted) {
+                  _downloadAndSaveReceiptPdf(txId);
+                }
+              },
+            ),
           ),
         );
         return;
       }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMsg),
+          behavior: SnackBarBehavior.floating,
+          action: SnackBarAction(
+            label: 'RETRY PDF',
+            textColor: Colors.amber,
+            onPressed: () => _downloadAndSaveReceiptPdf(txId),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Customer entry saved! PDF download error: $e'),
+          behavior: SnackBarBehavior.floating,
+          action: SnackBarAction(
+            label: 'RETRY PDF',
+            textColor: Colors.amber,
+            onPressed: () => _downloadAndSaveReceiptPdf(txId),
+          ),
+        ),
+      );
     }
+  }
+
+  Future<String> _savePdfToDevice(List<int> bytes, String txId) async {
+    Directory? targetDir;
+    try {
+      if (Platform.isAndroid) {
+        final downloadDir = Directory('/storage/emulated/0/Download');
+        if (await downloadDir.exists()) {
+          targetDir = downloadDir;
+        } else {
+          final externalDir = Directory('/sdcard/Download');
+          if (await externalDir.exists()) {
+            targetDir = externalDir;
+          } else {
+            targetDir = Directory.systemTemp;
+          }
+        }
+      } else {
+        targetDir = Directory.systemTemp;
+      }
+    } catch (_) {
+      targetDir = Directory.systemTemp;
+    }
+
+    final filename = 'JewelSetu_Bill_${txId.length > 8 ? txId.substring(0, 8) : txId}.pdf';
+    final file = File('${targetDir.path}/$filename');
+    await file.writeAsBytes(bytes, flush: true);
+
+    if (!file.existsSync() || file.lengthSync() == 0) {
+      throw Exception('PDF file creation failed or file is empty.');
+    }
+
+    return file.path;
+  }
+
+  Future<void> _openPdfFile(String filePath) async {
+    try {
+      final uri = Uri.file(filePath);
+      if (await url_launcher.canLaunchUrl(uri)) {
+        await url_launcher.launchUrl(uri);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveEntry({bool downloadPdf = false}) async {
+    if (_isSaving || _isDownloadingPdf) return;
+    if (!_formKey.currentState!.validate()) return;
 
     if (_sendSmsReminder && _reminderDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -238,8 +414,6 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
       return;
     }
 
-    // This endpoint is confirmed for customers only. Do not send supplier
-    // records to the customer endpoint.
     final reminderDate = _reminderDate == null
         ? null
         : '${_reminderDate!.year.toString().padLeft(4, '0')}-'
@@ -248,6 +422,104 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
 
     final paymentMode = _payPerItem ? 'item_wise' : 'total';
     const paymentMethod = 'cash';
+
+    // Existing Customer Handler
+    if (widget.isExistingCustomer) {
+      final existingPayload = <String, dynamic>{
+        'phone_number': _normalizePhoneNumber(_phoneController.text),
+        if (_receiverController.text.trim().isNotEmpty)
+          'receiver': _receiverController.text.trim(),
+        'payment_mode': paymentMode,
+        'payment_method': paymentMethod,
+        if (!_payPerItem) 'total_payment': _overallPaid,
+        'items': _items.map((item) {
+          final rateText = item.rate.text.trim().replaceAll(',', '');
+          final weightText = item.weight.text.trim().replaceAll(',', '');
+          return <String, dynamic>{
+            'item_name': item.name.text.trim(),
+            'weight_grams': double.parse(weightText),
+            'rate_per_gram': rateText.isNotEmpty ? double.tryParse(rateText) : null,
+            'total_amount': item.total,
+            if (_payPerItem) 'amount_paid': item.paid,
+            'reminder_date': reminderDate,
+            'sms_reminder_enabled': _sendSmsReminder,
+          };
+        }).toList(),
+      };
+
+      setState(() => _isSaving = true);
+      try {
+        final uri = Uri.parse(ApiConfig.existingCustomerUrl);
+        final response = await ApiClient.instance.post(
+          uri,
+          headers: const {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: jsonEncode(existingPayload),
+        );
+
+        dynamic responseData;
+        try {
+          responseData = jsonDecode(response.body);
+        } on FormatException {
+          responseData = null;
+        }
+
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          final txId = responseData is Map ? responseData['transaction_id']?.toString() : null;
+
+          if (downloadPdf) {
+            setState(() {
+              _isSaving = false;
+              _isDownloadingPdf = true;
+            });
+            await _downloadAndSaveReceiptPdf(txId);
+          } else {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Item added for customer successfully.'),
+                backgroundColor: Color(0xFF247A4B),
+              ),
+            );
+            Navigator.of(context).maybePop(true);
+          }
+          return;
+        }
+
+        final serverMessage = responseData is Map
+            ? (responseData['detail'] ?? responseData['message'] ?? responseData['error'])?.toString()
+            : null;
+
+        String message;
+        if (response.statusCode == 401) {
+          message = 'Login session expired. Please log in again.';
+        } else if (response.statusCode == 422) {
+          message = 'Some item fields are invalid.';
+        } else {
+          message = serverMessage ?? 'Could not add item for customer (HTTP ${response.statusCode}).';
+        }
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error adding item: $e')),
+        );
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isSaving = false;
+            _isDownloadingPdf = false;
+          });
+        }
+      }
+      return;
+    }
 
     if (widget.isSupplier) {
       final supplierPayload = <String, dynamic>{
@@ -258,7 +530,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
             : null,
         'payment_mode': paymentMode,
         'payment_method': paymentMethod,
-        'total_payment': _payPerItem ? 0 : _overallPaid,
+        if (!_payPerItem) 'total_payment': _overallPaid,
         'notes': null,
         'items': _items.map((item) {
           final rateText = item.rate.text.trim().replaceAll(',', '');
@@ -270,7 +542,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
             'rate_per_gram':
                 rateText.isNotEmpty ? double.tryParse(rateText) : null,
             'total_amount': item.total,
-            'amount_paid': _payPerItem ? item.paid : 0,
+            if (_payPerItem) 'amount_paid': item.paid,
           };
         }).toList(),
       };
@@ -297,13 +569,6 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
           );
         }
 
-        dynamic responseData;
-        try {
-          responseData = jsonDecode(response.body);
-        } on FormatException {
-          responseData = null;
-        }
-
         if (response.statusCode >= 200 && response.statusCode < 300) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -316,42 +581,9 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
           return;
         }
 
-        final serverMessage = responseData is Map
-            ? (responseData['detail'] ??
-                responseData['message'] ??
-                responseData['error'])
-                ?.toString()
-            : null;
-
-        String message;
-        if (response.statusCode == 401) {
-          message = 'Login session expired. Please log in again.';
-        } else if (response.statusCode == 422) {
-          if (responseData is Map && responseData['detail'] != null) {
-            final detail = responseData['detail'];
-            if (detail is List) {
-              message = detail.map((e) {
-                if (e is Map) {
-                  final loc = (e['loc'] as List?)?.join('.') ?? '';
-                  final msg = e['msg'] ?? '';
-                  return '$loc: $msg';
-                }
-                return e.toString();
-              }).join(', ');
-            } else {
-              message = detail.toString();
-            }
-          } else {
-            message = 'Some supplier or item fields are invalid.';
-          }
-        } else {
-          message = serverMessage ??
-              'Could not save supplier (HTTP ${response.statusCode}).';
-        }
-
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
+          SnackBar(content: Text('Could not save supplier (HTTP ${response.statusCode}).')),
         );
       } catch (e) {
         if (!mounted) return;
@@ -419,14 +651,24 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
       }
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Customer saved successfully.'),
-            backgroundColor: Color(0xFF247A4B),
-          ),
-        );
-        Navigator.of(context).maybePop(true);
+        final txId = responseData is Map ? responseData['transaction_id']?.toString() : null;
+
+        if (downloadPdf) {
+          setState(() {
+            _isSaving = false;
+            _isDownloadingPdf = true;
+          });
+          await _downloadAndSaveReceiptPdf(txId);
+        } else {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Customer saved successfully.'),
+              backgroundColor: Color(0xFF247A4B),
+            ),
+          );
+          Navigator.of(context).maybePop(true);
+        }
         return;
       }
 
@@ -440,24 +682,8 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
       String message;
       if (response.statusCode == 401) {
         message = 'Login session expired. Please log in again.';
-      } else if (response.statusCode == 422) {
-        if (responseData is Map && responseData['detail'] != null) {
-          final detail = responseData['detail'];
-          if (detail is List) {
-            message = detail.map((e) {
-              if (e is Map) {
-                final loc = (e['loc'] as List?)?.join('.') ?? '';
-                final msg = e['msg'] ?? '';
-                return '$loc: $msg';
-              }
-              return e.toString();
-            }).join(', ');
-          } else {
-            message = detail.toString();
-          }
-        } else {
-          message = 'Some customer or item fields are invalid.';
-        }
+      } else if (response.statusCode == 409) {
+        message = 'Shop profile is incomplete. Please complete shop details in Shop Settings.';
       } else {
         message = serverMessage ??
             'Could not save customer (HTTP ${response.statusCode}).';
@@ -467,22 +693,18 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message)),
       );
-    } on TimeoutException {
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Request timed out. Check internet and try again.'),
-        ),
-      );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not connect to the server. Please try again.'),
-        ),
+        SnackBar(content: Text('Error saving customer: $e')),
       );
     } finally {
-      if (mounted) setState(() => _isSaving = false);
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+          _isDownloadingPdf = false;
+        });
+      }
     }
   }
 
@@ -499,8 +721,12 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
           onPressed: () => Navigator.of(context).maybePop(),
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: _purple),
         ),
-        title: Text(isCustomer ? 'Add New Customer' : 'Add New Supplier',
-            style: const TextStyle(color: _text, fontSize: 19, fontWeight: FontWeight.w700)),
+        title: Text(
+          widget.isExistingCustomer
+              ? 'Add New Item'
+              : (isCustomer ? 'Add New Customer' : 'Add New Supplier'),
+          style: const TextStyle(color: _text, fontSize: 19, fontWeight: FontWeight.w700),
+        ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -531,27 +757,54 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
-              _sectionTitle(isCustomer ? 'Customer Details' : 'Supplier Details'),
+              _sectionTitle(
+                widget.isExistingCustomer
+                    ? 'Customer Details (Read Only)'
+                    : (isCustomer ? 'Customer Details' : 'Supplier Details'),
+              ),
               const SizedBox(height: 8),
               _groupCard([
-                _inputRow(icon: Icons.person_rounded, label: isCustomer ? 'Full Name *' : 'Supplier Name *',
-                    hint: isCustomer ? 'Enter customer name' : 'Enter supplier name',
-                    controller: _nameController,
-                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Name is required' : null),
-                _inputRow(icon: Icons.call_rounded, label: 'Phone Number *',
-                    hint: 'Enter phone number', controller: _phoneController,
-                    keyboardType: TextInputType.phone,
-                    validator: (v) {
-                      if (v == null || v.trim().isEmpty) {
-                        return 'Phone number is required';
-                      }
-                      if (!_isValidE164(_normalizePhoneNumber(v))) {
-                        return 'Enter a valid number with country code, e.g. +919876543210';
-                      }
-                      return null;
-                    }),
-                _inputRow(icon: Icons.location_on_rounded, label: 'Address',
-                    hint: 'Enter address (optional)', controller: _addressController, requiredField: false),
+                _inputRow(
+                  icon: Icons.person_rounded,
+                  label: isCustomer ? 'Full Name *' : 'Supplier Name *',
+                  hint: isCustomer ? 'Enter customer name' : 'Enter supplier name',
+                  controller: _nameController,
+                  readOnly: widget.isExistingCustomer,
+                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Name is required' : null,
+                ),
+                _inputRow(
+                  icon: Icons.call_rounded,
+                  label: 'Phone Number *',
+                  hint: 'Enter phone number',
+                  controller: _phoneController,
+                  keyboardType: TextInputType.phone,
+                  readOnly: widget.isExistingCustomer,
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Phone number is required';
+                    }
+                    if (!_isValidE164(_normalizePhoneNumber(v))) {
+                      return 'Enter a valid number with country code, e.g. +919876543210';
+                    }
+                    return null;
+                  },
+                ),
+                _inputRow(
+                  icon: Icons.location_on_rounded,
+                  label: 'Address',
+                  hint: 'Enter address (optional)',
+                  controller: _addressController,
+                  requiredField: false,
+                  readOnly: widget.isExistingCustomer,
+                ),
+                if (widget.isExistingCustomer)
+                  _inputRow(
+                    icon: Icons.assignment_ind_outlined,
+                    label: 'Note / Received By (Optional)',
+                    hint: 'e.g. Rahul Sharma (Customer\'s brother)',
+                    controller: _receiverController,
+                    requiredField: false,
+                  ),
               ]),
               const SizedBox(height: 18),
               _sectionTitle('Items (${_items.length})'),
@@ -564,196 +817,162 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
               OutlinedButton.icon(
                 onPressed: _addItem,
                 icon: const Icon(Icons.add_rounded, size: 22),
-                label: const Text('Add Another Item', style: TextStyle(fontWeight: FontWeight.w600)),
+                label: const Text('Add Another Item'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _purple,
-                  side: const BorderSide(color: Color(0xFF7B4B8B)),
-                  minimumSize: const Size.fromHeight(48),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+                  side: const BorderSide(color: Color(0xFFC8B2DD)),
+                  backgroundColor: const Color(0xFFF4ECFB),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
               ),
               const SizedBox(height: 18),
-              _sectionTitle('Order Summary'),
+              _sectionTitle('Payment Details'),
               const SizedBox(height: 8),
               _groupCard([
-                ...List.generate(_items.length, (i) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  child: Row(children: [
-                    Expanded(child: Text(
-                      'Item ${i + 1}${_items[i].name.text.trim().isEmpty ? '' : ' (${_items[i].name.text.trim()})'}',
-                      style: const TextStyle(fontSize: 12, color: _text),
-                      maxLines: 1, overflow: TextOverflow.ellipsis,
-                    )),
-                    Text('₹ ${_money(_items[i].total)}',
-                        style: const TextStyle(fontSize: 12, color: _text, fontWeight: FontWeight.w600)),
-                  ]),
-                )),
-                Container(
-                  margin: const EdgeInsets.all(10),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                  decoration: BoxDecoration(color: const Color(0xFFFBF0DD), borderRadius: BorderRadius.circular(12)),
-                  child: Row(children: [
-                    _iconCircle(Icons.currency_rupee_rounded),
-                    const SizedBox(width: 10),
-                    const Expanded(child: Text('Total Amount (₹)', style: TextStyle(fontSize: 12, color: _text))),
-                    Text(_money(_totalAmount), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _purple)),
-                  ]),
-                ),
-              ]),
-              const SizedBox(height: 18),
-              _sectionTitle('Payment Method'),
-              const SizedBox(height: 8),
-              _groupCard([
-                RadioListTile<bool>(
-                  value: true,
-                  groupValue: _payPerItem,
-                  activeColor: _purple,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                  title: const Text(
-                    'Pay amount item-wise',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _text),
-                  ),
-                  subtitle: const Text(
-                    'Enter payment separately for each item.',
-                    style: TextStyle(fontSize: 11, color: _muted),
-                  ),
-                  onChanged: _isSaving
-                      ? null
-                      : (value) => setState(() => _payPerItem = value!),
-                ),
-                RadioListTile<bool>(
-                  value: false,
-                  groupValue: _payPerItem,
-                  activeColor: _purple,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                  title: const Text(
-                    'Add one total payment',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _text),
-                  ),
-                  subtitle: const Text(
-                    'Enter the total amount received for all items together.',
-                    style: TextStyle(fontSize: 11, color: _muted),
-                  ),
-                  onChanged: _isSaving
-                      ? null
-                      : (value) => setState(() => _payPerItem = value!),
-                ),
-                if (!_payPerItem)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                    child: TextFormField(
-                      controller: _overallPaidController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: _fieldDecoration('Total amount received (₹)'),
-                      style: const TextStyle(fontSize: 14, color: _text),
-                      validator: (value) {
-                        if (_payPerItem || value == null || value.trim().isEmpty) return null;
-                        final amount = double.tryParse(value.trim().replaceAll(',', ''));
-                        if (amount == null || amount < 0) return 'Enter a valid amount';
-                        if (amount > _totalAmount) return 'Cannot exceed total amount';
-                        return null;
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('Payment Mode', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _text)),
+                    const SizedBox(height: 8),
+                    RadioListTile<bool>(
+                      value: true,
+                      groupValue: _payPerItem,
+                      title: const Text('Pay per item', style: TextStyle(fontSize: 13, color: _text)),
+                      subtitle: const Text('Enter payment for each item separately.', style: TextStyle(fontSize: 11, color: _muted)),
+                      contentPadding: EdgeInsets.zero,
+                      activeColor: _purple,
+                      onChanged: (val) {
+                        if (val != null) setState(() => _payPerItem = val);
                       },
                     ),
-                  ),
-              ]),
-              if (!_payPerItem) ...[
-                const SizedBox(height: 6),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 4),
-                  child: Text(
-                    'For saving, this payment is allocated to items in the order shown above because the backend stores payment per item.',
-                    style: TextStyle(fontSize: 11, color: _muted, height: 1.4),
-                  ),
+                    RadioListTile<bool>(
+                      value: false,
+                      groupValue: _payPerItem,
+                      title: const Text('Add one total payment', style: TextStyle(fontSize: 13, color: _text)),
+                      subtitle: const Text('Enter the total amount received for all items together.', style: TextStyle(fontSize: 11, color: _muted)),
+                      contentPadding: EdgeInsets.zero,
+                      activeColor: _purple,
+                      onChanged: (val) {
+                        if (val != null) setState(() => _payPerItem = val);
+                      },
+                    ),
+                  ]),
                 ),
-              ],
-              const SizedBox(height: 12),
+                if (!_payPerItem) ...[
+                  const Divider(color: _border, height: 1),
+                  _inputRow(
+                    icon: Icons.payments_rounded,
+                    label: 'Total Amount Received (₹)',
+                    hint: 'Enter overall payment received',
+                    controller: _overallPaidController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    requiredField: false,
+                  ),
+                ],
+              ]),
+              const SizedBox(height: 18),
               _sectionTitle('Payment Summary'),
               const SizedBox(height: 8),
-              _groupCard([
-                _summaryRow('Total Amount', _totalAmount, isEmphasized: true),
-                const Divider(height: 1, color: _border),
-                _summaryRow('Total Paid', _amountPaid, valueColor: const Color(0xFF22864B)),
-                const Divider(height: 1, color: _border),
-                _summaryRow('Remaining Balance', _balance, valueColor: const Color(0xFFD84343)),
-              ]),
+              _summaryCard(),
               const SizedBox(height: 18),
               _sectionTitle('Reminder (Optional)'),
               const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.72),
-                    borderRadius: BorderRadius.circular(15), border: Border.all(color: _border)),
-                child: Column(children: [
-                  InkWell(
-                    borderRadius: BorderRadius.circular(10), onTap: _pickReminderDate,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Row(children: [
-                        _iconCircle(Icons.calendar_month_rounded),
-                        const SizedBox(width: 10),
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          const Text('Reminder Date', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _text)),
-                          const SizedBox(height: 4),
-                          Text(_reminderDate == null ? 'Select reminder date (optional)' :
-                          '${_reminderDate!.day.toString().padLeft(2, '0')}/${_reminderDate!.month.toString().padLeft(2, '0')}/${_reminderDate!.year}',
-                              style: const TextStyle(fontSize: 12, color: _muted)),
-                        ])),
-                        const Icon(Icons.calendar_today_outlined, color: _purple, size: 19),
-                      ]),
-                    ),
-                  ),
-                  const Divider(height: 20, color: _border),
-                  SwitchListTile.adaptive(
-                    contentPadding: EdgeInsets.zero, value: _sendSmsReminder,
-                    activeTrackColor: _purple,
-                    onChanged: (value) => setState(() => _sendSmsReminder = value),
-                    title: const Text('Send reminder by SMS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _text)),
-                    subtitle: Text(_sendSmsReminder ? 'SMS reminder enabled' : 'SMS reminder disabled',
-                        style: const TextStyle(fontSize: 11, color: _muted)),
-                    secondary: _iconCircle(Icons.sms_outlined),
-                  ),
-                ]),
-              ),
-              const SizedBox(height: 18),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: const Color(0xFFF4EFFB), borderRadius: BorderRadius.circular(14)),
-                child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Icon(Icons.info_outline_rounded, color: Colors.deepPurple),
-                  SizedBox(width: 10),
-                  Expanded(child: Text('Total amount and balance are calculated automatically from all added items.',
-                      style: TextStyle(fontSize: 12, height: 1.5, color: _purple))),
-                ]),
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                height: 52,
-                child: ElevatedButton.icon(
-                  onPressed: _isSaving ? null : _saveEntry,
-                  icon: _isSaving
-                      ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                      : const Icon(Icons.save_rounded, size: 19),
-                  label: Text(
-                    _isSaving
-                        ? 'Saving...'
-                        : 'Save ${isCustomer ? 'Customer Entry' : 'Supplier Entry'}',
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _purple, foregroundColor: Colors.white, elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              _groupCard([
+                InkWell(
+                  onTap: _pickReminderDate,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                    child: Row(children: [
+                      _iconCircle(Icons.calendar_month_rounded),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          const Text('Reminder Date', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _text)),
+                          const SizedBox(height: 2),
+                          Text(
+                            _reminderDate == null
+                                ? 'Select reminder date (optional)'
+                                : '${_reminderDate!.day.toString().padLeft(2, '0')}/${_reminderDate!.month.toString().padLeft(2, '0')}/${_reminderDate!.year}',
+                            style: TextStyle(fontSize: 12, color: _reminderDate == null ? _muted : _text),
+                          ),
+                        ]),
+                      ),
+                      const Icon(Icons.date_range_rounded, color: _purple, size: 20),
+                    ]),
                   ),
                 ),
+                const Divider(color: _border, height: 1),
+                SwitchListTile.adaptive(
+                  value: _sendSmsReminder,
+                  activeColor: _purple,
+                  title: const Text('Send reminder by SMS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _text)),
+                  subtitle: Text(_sendSmsReminder ? 'SMS reminder enabled' : 'SMS reminder disabled',
+                      style: const TextStyle(fontSize: 11, color: _muted)),
+                  onChanged: (val) => setState(() => _sendSmsReminder = val),
+                ),
+              ]),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: const Color(0xFFF2ECFA), borderRadius: BorderRadius.circular(14)),
+                child: const Row(children: [
+                  Icon(Icons.info_outline_rounded, color: _purple, size: 20),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text('Total amount and balance are calculated automatically from all added items.',
+                        style: TextStyle(fontSize: 11, color: _text)),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 22),
+
+              // Bottom Action Buttons: Save Entry vs Save & Download Bill
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 52,
+                      child: OutlinedButton.icon(
+                        onPressed: (_isSaving || _isDownloadingPdf) ? null : () => _saveEntry(downloadPdf: false),
+                        icon: _isSaving
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: _purple, strokeWidth: 2))
+                            : const Icon(Icons.save_rounded, size: 20),
+                        label: Text(
+                          _isSaving ? 'Saving...' : 'Save Entry',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _purple,
+                          side: const BorderSide(color: _purple),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 1,
+                    child: SizedBox(
+                      height: 52,
+                      child: ElevatedButton.icon(
+                        onPressed: (_isSaving || _isDownloadingPdf) ? null : () => _saveEntry(downloadPdf: true),
+                        icon: _isDownloadingPdf
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                            : const Icon(Icons.picture_as_pdf_rounded, size: 20, color: Colors.white),
+                        label: Text(
+                          _isDownloadingPdf ? 'Downloading...' : 'Save & Download Bill',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _purple,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -761,6 +980,43 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
       ),
     );
   }
+
+  Widget _sectionTitle(String title) => Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _text));
+
+  Widget _groupCard(List<Widget> children) => Container(
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: _border)),
+    child: Column(children: children),
+  );
+
+  Widget _inputRow({
+    required IconData icon,
+    required String label,
+    required String hint,
+    required TextEditingController controller,
+    TextInputType keyboardType = TextInputType.text,
+    String? Function(String?)? validator,
+    bool requiredField = true,
+    bool readOnly = false,
+  }) => Padding(
+    padding: const EdgeInsets.fromLTRB(9, 7, 9, 2),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      _iconCircle(icon),
+      const SizedBox(width: 9),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _text)),
+        TextFormField(
+          controller: controller,
+          keyboardType: keyboardType,
+          readOnly: readOnly,
+          enabled: !readOnly,
+          validator: requiredField ? validator : null,
+          onChanged: (_) => _refresh(),
+          decoration: _fieldDecoration(hint),
+          style: TextStyle(fontSize: 12, color: readOnly ? _muted : _text),
+        ),
+      ])),
+    ]),
+  );
 
   Widget _itemCard(_JewelleryItem item, int index) => Container(
     margin: const EdgeInsets.only(bottom: 10),
@@ -788,48 +1044,31 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
         hint: 'e.g. Gold Ring, Necklace', controller: item.name,
         validator: (v) => (v == null || v.trim().isEmpty) ? 'Item name is required' : null,
       ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(6, 8, 4, 10),
-        child: Row(children: [
-          Expanded(child: _compactNumberField(label: 'Weight (Grams) *',
-              hint: 'e.g. 12.5', controller: item.weight,
-              validator: (v) => _positiveNumberValidator(v, 'Weight'))),
-          const SizedBox(width: 10),
-          Expanded(child: _compactNumberField(label: 'Rate per Gram (₹)',
-              hint: 'e.g. 6,200', controller: item.rate,
-              validator: (v) => _optionalPositiveNumberValidator(v, 'Rate'))),
-        ]),
-      ),
-      Container(
-        margin: const EdgeInsets.fromLTRB(2, 0, 2, 0),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        decoration: BoxDecoration(color: const Color(0xFFFBF0DD), borderRadius: BorderRadius.circular(12)),
-        child: Row(children: [
-          _iconCircle(Icons.currency_rupee_rounded),
-          const SizedBox(width: 10),
-          const Expanded(child: Text('Item Total (₹)', style: TextStyle(fontSize: 12, color: _text))),
-          SizedBox(
-            width: 125,
-            child: TextFormField(
-              controller: item.totalController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              textAlign: TextAlign.end,
-              decoration: const InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(vertical: 5, horizontal: 4),
-                border: UnderlineInputBorder(),
-                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _purple, width: 1.3)),
-              ),
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: _purple),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) return 'Required';
-                final amount = double.tryParse(value.trim().replaceAll(',', ''));
-                if (amount == null || amount < 0) return 'Invalid';
-                return null;
-              },
-            ),
+      Row(children: [
+        Expanded(
+          child: _compactNumberField(
+            label: 'Weight (g) *', hint: '0.0', controller: item.weight,
+            validator: (v) {
+              final val = double.tryParse(v?.trim().replaceAll(',', '') ?? '');
+              return (val == null || val <= 0) ? 'Enter weight' : null;
+            },
           ),
-        ]),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _compactNumberField(
+            label: 'Rate / Gram (₹)', hint: 'e.g. 6200', controller: item.rate,
+            validator: (v) => null,
+          ),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      _compactNumberField(
+        label: 'Total Amount (₹) *', hint: '0', controller: item.totalController,
+        validator: (v) {
+          final val = double.tryParse(v?.trim().replaceAll(',', '') ?? '');
+          return (val == null || val <= 0) ? 'Enter total' : null;
+        },
       ),
       if (_payPerItem) ...[
         const SizedBox(height: 10),
@@ -874,65 +1113,26 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
     ]),
   );
 
+  Widget _summaryCard() => Container(
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: _border)),
+    child: Column(children: [
+      _summaryRow('Total Amount', _totalAmount, isEmphasized: true),
+      const Divider(color: _border, height: 1),
+      _summaryRow('Total Paid', _amountPaid, valueColor: const Color(0xFF247A4B)),
+      const Divider(color: _border, height: 1),
+      _summaryRow('Remaining Balance', _balance, valueColor: const Color(0xFFD84343), isEmphasized: true),
+    ]),
+  );
+
   Widget _summaryRow(String label, double amount, {Color? valueColor, bool isEmphasized = false}) =>
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
         child: Row(children: [
-          Expanded(
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: isEmphasized ? 13 : 12,
-                fontWeight: isEmphasized ? FontWeight.w700 : FontWeight.w500,
-                color: _text,
-              ),
-            ),
-          ),
-          Text(
-            '₹ ${_money(amount)}',
-            style: TextStyle(
-              fontSize: isEmphasized ? 18 : 15,
-              fontWeight: FontWeight.w800,
-              color: valueColor ?? _purple,
-            ),
-          ),
+          Text(label, style: TextStyle(fontSize: 13, fontWeight: isEmphasized ? FontWeight.w700 : FontWeight.w500, color: _text)),
+          const Spacer(),
+          Text('₹ ${_money(amount)}', style: TextStyle(fontSize: isEmphasized ? 16 : 14, fontWeight: FontWeight.w800, color: valueColor ?? _text)),
         ]),
       );
-
-  Widget _sectionTitle(String title) => Text(title,
-      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _text));
-
-  Widget _groupCard(List<Widget> children) => Container(
-    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(15), border: Border.all(color: _border)),
-    child: Column(children: children),
-  );
-
-  Widget _inputRow({
-    required IconData icon,
-    required String label,
-    required String hint,
-    required TextEditingController controller,
-    TextInputType keyboardType = TextInputType.text,
-    String? Function(String?)? validator,
-    bool requiredField = true,
-  }) => Padding(
-    padding: const EdgeInsets.fromLTRB(9, 7, 9, 2),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-      _iconCircle(icon),
-      const SizedBox(width: 9),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _text)),
-        TextFormField(
-          controller: controller, keyboardType: keyboardType,
-          validator: requiredField ? validator : null,
-          onChanged: (_) => _refresh(),
-          decoration: _fieldDecoration(hint),
-          style: const TextStyle(fontSize: 12, color: _text),
-        ),
-      ])),
-    ]),
-  );
 
   Widget _compactNumberField({
     required String label,
@@ -950,55 +1150,19 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
     ),
   ]);
 
-  String? _positiveNumberValidator(String? value, String label) {
-    if (value == null || value.trim().isEmpty) return '$label is required';
-    final number = double.tryParse(value.trim().replaceAll(',', ''));
-    if (number == null || number <= 0) return 'Enter valid $label';
-    return null;
-  }
-
-  String? _optionalPositiveNumberValidator(String? value, String label) {
-    if (value == null || value.trim().isEmpty) return null;
-    final number = double.tryParse(value.trim().replaceAll(',', ''));
-    if (number == null || number <= 0) return 'Enter valid $label';
-    return null;
-  }
-
   Widget _iconCircle(IconData icon) => Container(
-    width: 37, height: 37,
-    decoration: const BoxDecoration(color: Color(0xFFF7EFE4), shape: BoxShape.circle),
-    child: Icon(icon, size: 18, color: const Color(0xFF77716B)),
-  );
-
-  Widget _paymentCard({
-    required IconData icon,
-    required Color iconColor,
-    required Color iconBg,
-    required String label,
-    required Widget child,
-  }) => Container(
-    padding: const EdgeInsets.all(9),
-    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.72),
-        border: Border.all(color: _border), borderRadius: BorderRadius.circular(13)),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(width: 30, height: 30, decoration: BoxDecoration(color: iconBg, shape: BoxShape.circle),
-          child: Icon(icon, size: 16, color: iconColor)),
-      const SizedBox(width: 7),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _text)),
-        child,
-      ])),
-    ]),
+    width: 28, height: 28, alignment: Alignment.center,
+    decoration: const BoxDecoration(color: Color(0xFFF2ECFA), shape: BoxShape.circle),
+    child: Icon(icon, size: 16, color: _purple),
   );
 
   InputDecoration _fieldDecoration(String hint) => InputDecoration(
     hintText: hint,
-    hintStyle: const TextStyle(fontSize: 11, color: _muted),
+    hintStyle: const TextStyle(color: _muted, fontSize: 11),
     isDense: true,
     contentPadding: const EdgeInsets.symmetric(vertical: 8),
-    border: const UnderlineInputBorder(borderSide: BorderSide(color: _border)),
-    enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: _border)),
-    focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: _purple, width: 1.2)),
-    errorStyle: const TextStyle(fontSize: 10),
+    border: InputBorder.none,
+    enabledBorder: InputBorder.none,
+    focusedBorder: InputBorder.none,
   );
 }

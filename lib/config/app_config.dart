@@ -25,4 +25,5 @@ class ApiConfig {
   static String get supplierExistingUrl => '$baseUrl$supplierExisting';
   static String get supplierPaymentUrl => '$baseUrl$supplierPayment';
   static String get supplierTransactionsUrl => '$baseUrl$supplierTransactions';
+  static String get ownerWorkersUrl => '$baseUrl/owner/workers';
 }

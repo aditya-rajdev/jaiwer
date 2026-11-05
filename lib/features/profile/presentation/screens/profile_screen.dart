@@ -130,137 +130,245 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _openEditProfileSheet() async {
     final formKey = GlobalKey<FormState>();
     final nameCtrl = TextEditingController(text: name);
+    final emailCtrl = TextEditingController(text: email);
     final phoneCtrl = TextEditingController(text: phone.replaceAll(RegExp(r'^\+91\s*'), ''));
-    final shopCtrl = TextEditingController(text: shopName);
     final addressCtrl = TextEditingController(text: address == 'Not available' ? '' : address);
+
+    bool isSaving = false;
+
+    Future<bool> onWillPop(BuildContext ctx) async {
+      final nameChanged = nameCtrl.text.trim() != name;
+      final emailChanged = emailCtrl.text.trim() != email;
+      final phoneCleaned = phone.replaceAll(RegExp(r'^\+91\s*'), '');
+      final phoneChanged = phoneCtrl.text.trim() != phoneCleaned;
+      final addressCleaned = address == 'Not available' ? '' : address;
+      final addressChanged = addressCtrl.text.trim() != addressCleaned;
+
+      if (nameChanged || emailChanged || phoneChanged || addressChanged) {
+        final confirm = await showDialog<bool>(
+          context: ctx,
+          builder: (dCtx) => AlertDialog(
+            backgroundColor: background,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text('Unsaved Changes', style: TextStyle(color: primary, fontWeight: FontWeight.bold)),
+            content: const Text('You have unsaved changes. Are you sure you want to discard them?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dCtx, false),
+                child: const Text('Keep Editing', style: TextStyle(color: Color(0xFF555160))),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(dCtx, true),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
+                child: const Text('Discard', style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          ),
+        );
+        return confirm ?? false;
+      }
+      return true;
+    }
 
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
-        ),
-        child: Container(
-          padding: const EdgeInsets.all(22),
-          decoration: const BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-          ),
-          child: SingleChildScrollView(
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (ctx, setSheetState) => PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, result) async {
+            if (didPop) return;
+            final shouldPop = await onWillPop(sheetContext);
+            if (shouldPop && sheetContext.mounted) {
+              Navigator.pop(sheetContext, false);
+            }
+          },
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+            ),
+            child: Container(
+              padding: const EdgeInsets.all(22),
+              decoration: const BoxDecoration(
+                color: background,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+              ),
+              child: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Edit Profile',
-                        style: TextStyle(
-                          color: primary,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Edit Profile',
+                            style: TextStyle(
+                              color: primary,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () async {
+                              final shouldPop = await onWillPop(sheetContext);
+                              if (shouldPop && sheetContext.mounted) {
+                                Navigator.pop(sheetContext, false);
+                              }
+                            },
+                            icon: const Icon(Icons.close_rounded, color: primary),
+                          ),
+                        ],
+                      ),
+                      const Divider(color: borderColor),
+                      const SizedBox(height: 12),
+
+                      // Full Name
+                      TextFormField(
+                        controller: nameCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'Full Name *',
+                          prefixIcon: const Icon(Icons.person_outline, color: primary),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                        validator: (v) => (v == null || v.trim().isEmpty) ? 'Full Name is required' : null,
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Email Address
+                      TextFormField(
+                        controller: emailCtrl,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: InputDecoration(
+                          labelText: 'Email Address *',
+                          helperText: 'Changing email requires OTP verification',
+                          prefixIcon: const Icon(Icons.email_outlined, color: primary),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) return 'Email Address is required';
+                          final isValid = RegExp(r'^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(v.trim());
+                          if (!isValid) return 'Enter a valid email address';
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Phone Number
+                      TextFormField(
+                        controller: phoneCtrl,
+                        keyboardType: TextInputType.phone,
+                        decoration: InputDecoration(
+                          labelText: 'Phone Number',
+                          hintText: '10-digit number',
+                          prefixText: '+91 ',
+                          prefixIcon: const Icon(Icons.phone_outlined, color: primary),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                        validator: (v) {
+                          if (v != null && v.trim().isNotEmpty) {
+                            final digits = v.replaceAll(RegExp(r'\D'), '');
+                            if (digits.length != 10) return 'Enter a valid 10-digit mobile number';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Address
+                      TextFormField(
+                        controller: addressCtrl,
+                        maxLines: 2,
+                        decoration: InputDecoration(
+                          labelText: 'Address',
+                          prefixIcon: const Icon(Icons.location_on_outlined, color: primary),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                         ),
                       ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(sheetContext, false),
-                        icon: const Icon(Icons.close_rounded, color: primary),
+                      const SizedBox(height: 22),
+
+                      // Action Buttons: Save & Cancel
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: isSaving ? null : () async {
+                                final shouldPop = await onWillPop(sheetContext);
+                                if (shouldPop && sheetContext.mounted) {
+                                  Navigator.pop(sheetContext, false);
+                                }
+                              },
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                side: const BorderSide(color: primary),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
+                              child: const Text('Cancel', style: TextStyle(color: primary, fontSize: 16, fontWeight: FontWeight.w600)),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 2,
+                            child: ElevatedButton.icon(
+                              onPressed: isSaving ? null : () async {
+                                if (!formKey.currentState!.validate()) return;
+                                setSheetState(() => isSaving = true);
+
+                                final newName = nameCtrl.text.trim();
+                                final newEmail = emailCtrl.text.trim();
+                                final newPhone = phoneCtrl.text.trim().isNotEmpty
+                                    ? '+91${phoneCtrl.text.trim().replaceAll(RegExp(r'\D'), '')}'
+                                    : '';
+                                final newAddress = addressCtrl.text.trim();
+
+                                if (newEmail != email) {
+                                  final otpVerified =
+                                  await _openEmailOtpVerificationDialog(
+                                    newEmail: newEmail,
+                                  );
+
+                                  if (!otpVerified) {
+                                    setSheetState(() => isSaving = false);
+                                    return;
+                                  }
+
+                                  await _storage.write(key: 'user_email', value: newEmail);
+                                }
+
+                                await _storage.write(key: 'user_name', value: newName);
+                                if (newPhone.isNotEmpty) {
+                                  await _storage.write(key: 'user_phone', value: newPhone);
+                                }
+                                if (newAddress.isNotEmpty) {
+                                  await _storage.write(key: 'shop_address', value: newAddress);
+                                }
+
+                                if (sheetContext.mounted) {
+                                  Navigator.pop(sheetContext, true);
+                                }
+                              },
+                              icon: isSaving
+                                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                                  : const Icon(Icons.check_circle_outline, color: Colors.white),
+                              label: Text(
+                                isSaving ? 'Saving...' : 'Save Changes',
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: primary,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                  const Divider(color: borderColor),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: nameCtrl,
-                    decoration: InputDecoration(
-                      labelText: 'Full Name *',
-                      prefixIcon: const Icon(Icons.person_outline, color: primary),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Full Name is required' : null,
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: phoneCtrl,
-                    keyboardType: TextInputType.phone,
-                    decoration: InputDecoration(
-                      labelText: 'Phone Number',
-                      hintText: '10-digit number',
-                      prefixText: '+91 ',
-                      prefixIcon: const Icon(Icons.phone_outlined, color: primary),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                    validator: (v) {
-                      if (v != null && v.trim().isNotEmpty) {
-                        final digits = v.replaceAll(RegExp(r'\D'), '');
-                        if (digits.length != 10) return 'Enter a valid 10-digit mobile number';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: shopCtrl,
-                    decoration: InputDecoration(
-                      labelText: 'Shop Name',
-                      prefixIcon: const Icon(Icons.storefront_outlined, color: primary),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: addressCtrl,
-                    decoration: InputDecoration(
-                      labelText: 'Address',
-                      prefixIcon: const Icon(Icons.location_on_outlined, color: primary),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-                  const SizedBox(height: 22),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton.icon(
-                      onPressed: () async {
-                        if (!formKey.currentState!.validate()) return;
-                        final newName = nameCtrl.text.trim();
-                        final newPhone = phoneCtrl.text.trim().isNotEmpty
-                            ? '+91${phoneCtrl.text.trim().replaceAll(RegExp(r'\D'), '')}'
-                            : '';
-                        final newShop = shopCtrl.text.trim().isNotEmpty
-                            ? shopCtrl.text.trim()
-                            : 'JAIWER Member';
-                        final newAddress = addressCtrl.text.trim();
-
-                        await _storage.write(key: 'user_name', value: newName);
-                        if (newPhone.isNotEmpty) {
-                          await _storage.write(key: 'user_phone', value: newPhone);
-                        }
-                        await _storage.write(key: 'shop_name', value: newShop);
-                        if (newAddress.isNotEmpty) {
-                          await _storage.write(key: 'shop_address', value: newAddress);
-                        }
-
-                        if (sheetContext.mounted) {
-                          Navigator.pop(sheetContext, true);
-                        }
-                      },
-                      icon: const Icon(Icons.check_circle_outline, color: Colors.white),
-                      label: const Text(
-                        'Save Changes',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primary,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -274,182 +382,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _openChangeEmailDialog() async {
-    final emailCtrl = TextEditingController(text: email);
-    final formKey = GlobalKey<FormState>();
-
-    final step1 = await showDialog<String>(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: background,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Change Email Address', style: TextStyle(color: primary, fontWeight: FontWeight.bold)),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Enter your new email address. An OTP will be sent for verification.', style: TextStyle(fontSize: 13, color: Color(0xFF555160))),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: emailCtrl,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  labelText: 'New Email Address',
-                  prefixIcon: const Icon(Icons.email_outlined, color: primary),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return 'Email is required';
-                  final isValid = RegExp(r'^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(v.trim());
-                  if (!isValid) return 'Enter a valid email address';
-                  return null;
-                },
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('Cancel', style: TextStyle(color: Color(0xFF555160))),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (formKey.currentState!.validate()) {
-                Navigator.pop(dialogCtx, emailCtrl.text.trim());
-              }
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: primary),
-            child: const Text('Send OTP', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-
-    if (step1 != null && mounted) {
-      _openOtpVerificationDialog(
-        target: step1,
-        isEmail: true,
-        onVerified: () async {
-          await _storage.write(key: 'user_email', value: step1);
-          if (mounted) {
-            await _loadProfile();
-            _showMessage('Email address updated successfully!');
-          }
-        },
-      );
-    }
-  }
-
-  Future<void> _openChangePhoneDialog() async {
-    final phoneCtrl = TextEditingController(text: phone.replaceAll(RegExp(r'^\+91\s*'), ''));
-    final formKey = GlobalKey<FormState>();
-
-    final step1 = await showDialog<String>(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: background,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Change Phone Number', style: TextStyle(color: primary, fontWeight: FontWeight.bold)),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Enter your new mobile number. An OTP will be sent for verification.', style: TextStyle(fontSize: 13, color: Color(0xFF555160))),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: phoneCtrl,
-                keyboardType: TextInputType.phone,
-                decoration: InputDecoration(
-                  labelText: 'New Mobile Number',
-                  prefixText: '+91 ',
-                  prefixIcon: const Icon(Icons.phone_outlined, color: primary),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return 'Mobile number is required';
-                  final digits = v.replaceAll(RegExp(r'\D'), '');
-                  if (digits.length != 10) return 'Enter a valid 10-digit mobile number';
-                  return null;
-                },
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('Cancel', style: TextStyle(color: Color(0xFF555160))),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (formKey.currentState!.validate()) {
-                Navigator.pop(dialogCtx, '+91${phoneCtrl.text.trim().replaceAll(RegExp(r'\D'), '')}');
-              }
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: primary),
-            child: const Text('Send OTP', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-
-    if (step1 != null && mounted) {
-      _openOtpVerificationDialog(
-        target: step1,
-        isEmail: false,
-        onVerified: () async {
-          await _storage.write(key: 'user_phone', value: step1);
-          if (mounted) {
-            await _loadProfile();
-            _showMessage('Phone number updated successfully!');
-          }
-        },
-      );
-    }
-  }
-
-  void _openOtpVerificationDialog({
-    required String target,
-    required bool isEmail,
-    required VoidCallback onVerified,
-  }) {
+  Future<bool> _openEmailOtpVerificationDialog({
+    required String newEmail,
+  }) async {
     final otpCtrl = TextEditingController();
     String? errorText;
 
-    showDialog<void>(
+    final verified = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (dialogCtx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
           backgroundColor: background,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text('OTP Verification', style: TextStyle(color: primary, fontWeight: FontWeight.bold)),
+          title: const Text('Email OTP Verification', style: TextStyle(color: primary, fontWeight: FontWeight.bold)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Enter 6-digit OTP sent to $target.',
+                'Enter 6-digit OTP sent to $newEmail.',
                 style: const TextStyle(fontSize: 13, color: Color(0xFF555160)),
               ),
               const SizedBox(height: 6),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(color: const Color(0xFFFFF0D6), borderRadius: BorderRadius.circular(8)),
-                child: const Row(
-                  children: [
-                    Icon(Icons.info_outline, size: 16, color: Color(0xFFB8860B)),
-                    SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'Testing OTP: 123456',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFFB8860B)),
-                      ),
-                    ),
-                  ],
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF0D6),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'Email OTP verification must be connected to the backend. '
+                      'A test OTP is not accepted.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF8A5A00),
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
@@ -470,183 +438,95 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(dialogCtx),
+              onPressed: () => Navigator.pop(dialogCtx, false),
               child: const Text('Cancel', style: TextStyle(color: Color(0xFF555160))),
             ),
             ElevatedButton(
               onPressed: () {
-                final entered = otpCtrl.text.trim();
-                if (entered == '123456') {
-                  Navigator.pop(dialogCtx);
-                  onVerified();
-                } else {
-                  setDialogState(() {
-                    errorText = 'Invalid OTP. Please enter 123456 for testing.';
-                  });
-                }
+                setDialogState(() {
+                  errorText =
+                  'OTP verification API is not connected yet. '
+                      'Email has not been changed.';
+                });
               },
               style: ElevatedButton.styleFrom(backgroundColor: primary),
-              child: const Text('Verify & Save', style: TextStyle(color: Colors.white)),
+              child: const Text('Verify Email', style: TextStyle(color: Colors.white)),
             ),
           ],
         ),
       ),
     );
-  }
 
-  void _openActiveSessionsDialog() {
-    showDialog<void>(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: background,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.devices_outlined, color: primary),
-            SizedBox(width: 8),
-            Text('Active Sessions', style: TextStyle(color: primary, fontWeight: FontWeight.bold, fontSize: 18)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: borderColor),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.phone_android_rounded, color: primary, size: 32),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Android Device', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: primary)),
-                        SizedBox(height: 2),
-                        Text('JAIWER Mobile App • Active Now', style: TextStyle(fontSize: 11, color: Color(0xFF555160))),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(color: const Color(0xFFE0F2DF), borderRadius: BorderRadius.circular(12)),
-                    child: const Text('Current', style: TextStyle(fontSize: 10, color: Color(0xFF247A4B), fontWeight: FontWeight.bold)),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            style: ElevatedButton.styleFrom(backgroundColor: primary),
-            child: const Text('Close', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
+    otpCtrl.dispose();
+    return verified ?? false;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: background,
+      appBar: AppBar(
+        backgroundColor: background,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          onPressed: () => Navigator.pop(context),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: primary, size: 20),
+        ),
+        title: const Text(
+          'My Profile',
+          style: TextStyle(color: primary, fontSize: 20, fontWeight: FontWeight.w700),
+        ),
+        centerTitle: true,
+        actions: [
+          TextButton.icon(
+            onPressed: _openEditProfileSheet,
+            icon: const Icon(Icons.edit_outlined, color: primary, size: 18),
+            label: const Text('Edit', style: TextStyle(color: primary, fontSize: 15, fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: SafeArea(
         child: isLoading
             ? const Center(
           child: CircularProgressIndicator(color: primary),
         )
-            : Column(
-          children: [
-            _buildAppBar(),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildProfileHeader(),
-                    const SizedBox(height: 22),
+            : SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildProfileHeader(),
+              const SizedBox(height: 22),
 
-                    _buildSectionTitle(
-                      Icons.person_outline,
-                      'Personal Information',
-                    ),
-                    _buildPersonalInformation(),
-
-                    const SizedBox(height: 22),
-
-                    _buildSectionTitle(
-                      Icons.layers_outlined,
-                      'Account Information',
-                    ),
-                    _buildAccountInformation(),
-
-                    const SizedBox(height: 22),
-
-                    _buildSectionTitle(
-                      Icons.lock_outline,
-                      'Security & Account',
-                    ),
-                    _buildSecuritySection(),
-
-                    const SizedBox(height: 28),
-                    _buildLogoutButton(),
-                  ],
-                ),
+              _buildSectionTitle(
+                Icons.person_outline,
+                'Personal Information',
               ),
-            ),
-          ],
+              _buildPersonalInformation(),
+
+              const SizedBox(height: 22),
+
+              _buildSectionTitle(
+                Icons.layers_outlined,
+                'Account Information',
+              ),
+              _buildAccountInformation(),
+
+              const SizedBox(height: 22),
+
+              _buildSectionTitle(
+                Icons.lock_outline,
+                'Security & Account',
+              ),
+              _buildSecuritySection(),
+
+              const SizedBox(height: 28),
+              _buildLogoutButton(),
+            ],
+          ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildAppBar() {
-    return SizedBox(
-      height: 60,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          const Text(
-            'My Profile',
-            style: TextStyle(
-              color: primary,
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          Positioned(
-            left: 4,
-            child: IconButton(
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(
-                Icons.arrow_back_ios_new,
-                color: primary,
-              ),
-            ),
-          ),
-          Positioned(
-            right: 12,
-            child: TextButton.icon(
-              onPressed: _openEditProfileSheet,
-              icon: const Icon(Icons.edit_outlined, color: primary),
-              label: const Text(
-                'Edit',
-                style: TextStyle(
-                  color: primary,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -654,7 +534,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildProfileHeader() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [
@@ -666,88 +546,96 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
         borderRadius: BorderRadius.circular(22),
       ),
-      child: Row(
+      child: Stack(
         children: [
-          Container(
-            width: 100,
-            height: 100,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: background,
-              border: Border.all(color: gold, width: 5),
+          const Positioned(
+            right: -10,
+            bottom: -10,
+            child: Icon(
+              Icons.diamond_outlined,
+              color: Color(0x18FFFFFF),
+              size: 85,
             ),
-            alignment: Alignment.center,
-            child: Text(
-              initials,
-              style: const TextStyle(
-                color: primary,
-                fontSize: 42,
-                fontWeight: FontWeight.w500,
+          ),
+          Row(
+            children: [
+              Container(
+                width: 75,
+                height: 75,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: background,
+                  border: Border.all(color: gold, width: 4),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  initials,
+                  style: const TextStyle(
+                    color: primary,
+                    fontSize: 32,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
-            ),
-          ),
-          const SizedBox(width: 18),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 25,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 15,
-                    vertical: 7,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFD98B),
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.person_outline,
-                        size: 17,
-                        color: primary,
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
                       ),
-                      const SizedBox(width: 6),
-                      Text(
-                        role,
-                        style: const TextStyle(
-                          color: Color(0xFF482A12),
-                          fontWeight: FontWeight.w600,
-                        ),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 5,
                       ),
-                    ],
-                  ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFD98B),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.person_outline,
+                            size: 15,
+                            color: primary,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            role,
+                            style: const TextStyle(
+                              color: Color(0xFF482A12),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      shopName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 9),
-                Text(
-                  shopName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 5),
-          const Icon(
-            Icons.diamond_outlined,
-            color: Color(0x66FFFFFF),
-            size: 55,
+              ),
+            ],
           ),
         ],
       ),
@@ -781,26 +669,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Icons.person_outline,
           'Full Name',
           name,
-          onTap: _openEditProfileSheet,
         ),
         _infoRow(
           Icons.email_outlined,
           'Email Address',
           email.isEmpty ? 'Not available' : email,
-          onTap: _openChangeEmailDialog,
         ),
         _infoRow(
           Icons.phone_outlined,
           'Phone Number',
           phone.isEmpty ? 'Not available' : _formatPhone(phone),
-          onTap: _openChangePhoneDialog,
         ),
         _infoRow(
           Icons.location_on_outlined,
           'Address',
           address,
           showArrow: true,
-          onTap: _openEditProfileSheet,
           isLast: true,
         ),
       ],
@@ -883,19 +767,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Icons.mark_email_read_outlined,
           'Change Email',
           'Update your email address (OTP verification)',
-          onTap: _openChangeEmailDialog,
         ),
         _securityRow(
           Icons.phonelink_lock_outlined,
           'Change Phone Number',
           'Update your mobile number (OTP verification)',
-          onTap: _openChangePhoneDialog,
         ),
         _securityRow(
           Icons.devices_outlined,
           'Active Sessions',
           'Manage devices where your account is logged in',
-          onTap: _openActiveSessionsDialog,
           isLast: true,
         ),
       ],
@@ -919,62 +800,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
       IconData icon,
       String label,
       String value, {
-        VoidCallback? onTap,
         bool showArrow = true,
         Widget? trailing,
         bool isLast = false,
       }) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 66),
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          border: isLast
-              ? null
-              : const Border(
-            bottom: BorderSide(color: borderColor),
+    return Container(
+      constraints: const BoxConstraints(minHeight: 66),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        border: isLast
+            ? null
+            : const Border(
+          bottom: BorderSide(color: borderColor),
+        ),
+      ),
+      child: Row(
+        children: [
+          _iconBox(icon),
+          const SizedBox(width: 14),
+          Expanded(
+            flex: 4,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF555160),
+                fontSize: 14,
+              ),
+            ),
           ),
-        ),
-        child: Row(
-          children: [
-            _iconBox(icon),
-            const SizedBox(width: 14),
-            Expanded(
-              flex: 4,
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: Color(0xFF555160),
-                  fontSize: 14,
-                ),
-              ),
-            ),
-            Expanded(
-              flex: 5,
-              child: trailing ??
-                  Text(
-                    value,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.end,
-                    style: const TextStyle(
-                      color: Color(0xFF301039),
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
+          Expanded(
+            flex: 5,
+            child: trailing ??
+                Text(
+                  value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(
+                    color: Color(0xFF301039),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
                   ),
+                ),
+          ),
+          if (showArrow) ...[
+            const SizedBox(width: 5),
+            const Icon(
+              Icons.chevron_right,
+              color: primary,
+              size: 25,
             ),
-            if (showArrow) ...[
-              const SizedBox(width: 5),
-              const Icon(
-                Icons.chevron_right,
-                color: primary,
-                size: 25,
-              ),
-            ],
           ],
-        ),
+        ],
       ),
     );
   }
@@ -983,56 +860,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
       IconData icon,
       String title,
       String subtitle, {
-        VoidCallback? onTap,
         bool isLast = false,
       }) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 76),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          border: isLast
-              ? null
-              : const Border(
-            bottom: BorderSide(color: borderColor),
+    return Container(
+      constraints: const BoxConstraints(minHeight: 76),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        border: isLast
+            ? null
+            : const Border(
+          bottom: BorderSide(color: borderColor),
+        ),
+      ),
+      child: Row(
+        children: [
+          _iconBox(icon),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Color(0xFF301039),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: Color(0xFF555160),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        child: Row(
-          children: [
-            _iconBox(icon),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      color: Color(0xFF301039),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      color: Color(0xFF555160),
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(
-              Icons.chevron_right,
-              color: primary,
-              size: 26,
-            ),
-          ],
-        ),
+          const Icon(
+            Icons.chevron_right,
+            color: primary,
+            size: 26,
+          ),
+        ],
       ),
     );
   }

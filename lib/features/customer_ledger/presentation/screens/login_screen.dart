@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import '../../../../services/api_client.dart';
 import '../../../dashboard/presentation/screens/dashboard_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -15,7 +15,6 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _otpController = TextEditingController();
   static const _baseUrl = 'https://jaiwer-backend.onrender.com';
-  static const _storage = FlutterSecureStorage();
   static const _purple = Color(0xFF35113F);
   static const _gold = Color(0xFFD2A04A);
   static const _cream = Color(0xFFFFFCF7);
@@ -96,14 +95,6 @@ class _LoginScreenState extends State<LoginScreen> {
       if (accessToken == null || accessToken.isEmpty) {
         throw Exception('API response did not include an access token.');
       }
-      await _storage.write(key: 'access_token', value: accessToken);
-      if (refreshToken != null && refreshToken.isNotEmpty) {
-        await _storage.write(key: 'refresh_token', value: refreshToken);
-      }
-      if (data['token_type'] != null) {
-        await _storage.write(key: 'token_type', value: data['token_type'].toString());
-      }
-
       // Save the actual profile returned by the backend for the drawer.
       final profile = data['profile'] is Map
           ? Map<String, dynamic>.from(data['profile'] as Map)
@@ -114,29 +105,30 @@ class _LoginScreenState extends State<LoginScreen> {
       final accountType = profile['account_type'] ?? data['account_type'];
       final userId = profile['user_id'] ?? data['user_id'];
       final ownerReferenceId = profile['owner_reference_id'] ?? data['owner_reference_id'];
-
-      if (name != null && name.toString().trim().isNotEmpty) {
-        await _storage.write(key: 'user_name', value: name.toString());
-      }
-      if (email != null && email.toString().trim().isNotEmpty) {
-        await _storage.write(key: 'user_email', value: email.toString());
-      }
-      if (phone != null && phone.toString().trim().isNotEmpty) {
-        await _storage.write(key: 'user_phone', value: phone.toString());
-      }
-      if (accountType != null && accountType.toString().trim().isNotEmpty) {
-        await _storage.write(key: 'account_type', value: accountType.toString());
-      }
-      if (userId != null && userId.toString().trim().isNotEmpty) {
-        await _storage.write(key: 'user_id', value: userId.toString());
-      }
-      if (ownerReferenceId != null && ownerReferenceId.toString().trim().isNotEmpty) {
-        await _storage.write(key: 'owner_reference_id', value: ownerReferenceId.toString());
-      }
       final shopName = profile['shop_name'] ?? data['shop_name'];
-      if (shopName != null && shopName.toString().trim().isNotEmpty) {
-        await _storage.write(key: 'shop_name', value: shopName.toString());
+
+      final profileMap = <String, String>{};
+      if (name != null) profileMap['user_name'] = name.toString();
+      if (email != null) profileMap['user_email'] = email.toString();
+      if (phone != null) profileMap['user_phone'] = phone.toString();
+      if (accountType != null) profileMap['account_type'] = accountType.toString();
+      if (userId != null) profileMap['user_id'] = userId.toString();
+      if (ownerReferenceId != null) profileMap['owner_reference_id'] = ownerReferenceId.toString();
+      if (shopName != null) profileMap['shop_name'] = shopName.toString();
+
+      final saved = await ApiClient.instance.saveAuthSession(
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        tokenType: data['token_type']?.toString(),
+        userProfile: profileMap,
+      );
+
+      if (!saved) {
+        if (!mounted) return;
+        _message('Session could not be established. Please try logging in again.');
+        return;
       }
+
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => DashboardScreen()),
