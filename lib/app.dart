@@ -7,6 +7,7 @@ import 'features/dashboard/presentation/screens/dashboard_screen.dart';
 import 'features/onboarding/presentation/screens/role_selection_screen.dart';
 import 'services/api_client.dart';
 import 'services/notification_service.dart';
+import 'services/sync_manager.dart';
 
 class JewelSetuApp extends StatelessWidget {
   const JewelSetuApp({super.key});
@@ -40,6 +41,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    SyncManager.instance.initialize();
     _sessionFuture = _checkSession();
   }
 

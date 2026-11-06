@@ -4,14 +4,16 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:url_launcher/url_launcher.dart' as url_launcher;
 
 import '../../../../config/app_config.dart';
 import '../../../../services/api_client.dart';
+import '../../../../services/connectivity_service.dart';
+import '../../../../services/sync_manager.dart';
+import '../../../../services/toast_service.dart';
 import '../../../shop_settings/presentation/screens/shop_settings_screen.dart';
 
 /// Add New Entry / Add New Item screen with support for multiple jewellery items,
-/// existing customer item additions with receiver notes, and PDF bill downloads.
+/// existing customer item additions with receiver notes, offline outbox, and PDF bill downloads.
 class NewCustomerScreen extends StatefulWidget {
   const NewCustomerScreen({
     super.key,
@@ -176,9 +178,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
 
   void _removeItem(int index) {
     if (_items.length <= 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('At least one item is required.')),
-      );
+      ToastService.instance.showWarning('At least one item is required.');
       return;
     }
     setState(() => _items.removeAt(index).dispose());
@@ -221,13 +221,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
   Future<void> _downloadAndSaveReceiptPdf(String? txId) async {
     if (txId == null || txId.trim().isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Customer saved! No PDF bill generated as no transaction ID was created for this payment.'),
-          backgroundColor: Color(0xFF247A4B),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      ToastService.instance.showSuccess('Customer saved successfully!');
       Navigator.of(context).maybePop(true);
       return;
     }
@@ -247,20 +241,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
 
           if (savedFile.existsSync() && savedFile.lengthSync() > 0) {
             if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Customer saved & PDF bill downloaded to $filePath!'),
-                backgroundColor: const Color(0xFF247A4B),
-                behavior: SnackBarBehavior.floating,
-                action: SnackBarAction(
-                  label: 'OPEN',
-                  textColor: Colors.white,
-                  onPressed: () {
-                    _openPdfFile(filePath);
-                  },
-                ),
-              ),
-            );
+            ToastService.instance.showSuccess('Customer saved & PDF bill downloaded!');
             Navigator.of(context).maybePop(true);
             return;
           }
@@ -272,7 +253,6 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
         errorData = jsonDecode(response.body);
       } catch (_) {}
 
-      String errorMsg = 'Failed to download PDF bill (HTTP ${response.statusCode}).';
       List<String> missingFields = [];
 
       if (response.statusCode == 409) {
@@ -297,63 +277,28 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
           } catch (_) {}
         }
 
-        final fieldText = missingFields.isNotEmpty
-            ? missingFields.join(', ')
-            : 'shop name, address, or phone number';
-
-        errorMsg = 'Customer entry saved! Bill not generated: Shop profile is incomplete (Missing: $fieldText).';
+        final fieldText = missingFields.isNotEmpty ? missingFields.join(', ') : 'shop details';
+        ToastService.instance.showWarning('Complete shop details to generate bill (Missing: $fieldText)');
 
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMsg),
-            backgroundColor: const Color(0xFFB42318),
-            duration: const Duration(seconds: 8),
-            behavior: SnackBarBehavior.floating,
-            action: SnackBarAction(
-              label: 'SHOP SETTINGS',
-              textColor: Colors.amber,
-              onPressed: () async {
-                await Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const ShopSettingsScreen(),
-                  ),
-                );
-                if (mounted) {
-                  _downloadAndSaveReceiptPdf(txId);
-                }
-              },
-            ),
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => const ShopSettingsScreen(),
           ),
         );
+        if (mounted) {
+          _downloadAndSaveReceiptPdf(txId);
+        }
         return;
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errorMsg),
-          behavior: SnackBarBehavior.floating,
-          action: SnackBarAction(
-            label: 'RETRY PDF',
-            textColor: Colors.amber,
-            onPressed: () => _downloadAndSaveReceiptPdf(txId),
-          ),
-        ),
-      );
+      ToastService.instance.showError('Customer saved, but bill download failed.');
+      Navigator.of(context).maybePop(true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Customer entry saved! PDF download error: $e'),
-          behavior: SnackBarBehavior.floating,
-          action: SnackBarAction(
-            label: 'RETRY PDF',
-            textColor: Colors.amber,
-            onPressed: () => _downloadAndSaveReceiptPdf(txId),
-          ),
-        ),
-      );
+      ToastService.instance.showError('Customer saved, but bill download failed.');
+      Navigator.of(context).maybePop(true);
     }
   }
 
@@ -390,27 +335,12 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
     return file.path;
   }
 
-  Future<void> _openPdfFile(String filePath) async {
-    try {
-      final uri = Uri.file(filePath);
-      if (await url_launcher.canLaunchUrl(uri)) {
-        await url_launcher.launchUrl(uri);
-      }
-    } catch (_) {}
-  }
-
   Future<void> _saveEntry({bool downloadPdf = false}) async {
     if (_isSaving || _isDownloadingPdf) return;
     if (!_formKey.currentState!.validate()) return;
 
     if (_sendSmsReminder && _reminderDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Please select a reminder date or turn off SMS reminder.',
-          ),
-        ),
-      );
+      ToastService.instance.showWarning('Please select a reminder date or turn off SMS reminder.');
       return;
     }
 
@@ -447,6 +377,13 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
         }).toList(),
       };
 
+      if (!ConnectivityService.instance.isOnline) {
+        await SyncManager.instance.queueOperation(type: 'add_customer_item', payload: existingPayload);
+        if (!mounted) return;
+        Navigator.of(context).maybePop(true);
+        return;
+      }
+
       setState(() => _isSaving = true);
       try {
         final uri = Uri.parse(ApiConfig.existingCustomerUrl);
@@ -477,12 +414,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
             await _downloadAndSaveReceiptPdf(txId);
           } else {
             if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Item added for customer successfully.'),
-                backgroundColor: Color(0xFF247A4B),
-              ),
-            );
+            ToastService.instance.showSuccess('Item added for customer successfully.');
             Navigator.of(context).maybePop(true);
           }
           return;
@@ -502,14 +434,10 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
         }
 
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
+        ToastService.instance.showError(message);
       } catch (e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error adding item: $e')),
-        );
+        ToastService.instance.showError('Error adding item: $e');
       } finally {
         if (mounted) {
           setState(() {
@@ -547,6 +475,13 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
         }).toList(),
       };
 
+      if (!ConnectivityService.instance.isOnline) {
+        await SyncManager.instance.queueOperation(type: 'add_supplier', payload: supplierPayload);
+        if (!mounted) return;
+        Navigator.of(context).maybePop(true);
+        return;
+      }
+
       setState(() => _isSaving = true);
       try {
         var response = await ApiClient.instance.post(
@@ -571,25 +506,16 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
 
         if (response.statusCode >= 200 && response.statusCode < 300) {
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Supplier saved successfully.'),
-              backgroundColor: Color(0xFF247A4B),
-            ),
-          );
+          ToastService.instance.showSuccess('Supplier added successfully.');
           Navigator.of(context).maybePop(true);
           return;
         }
 
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not save supplier (HTTP ${response.statusCode}).')),
-        );
+        ToastService.instance.showError('Could not save supplier (HTTP ${response.statusCode}).');
       } catch (e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving supplier: $e')),
-        );
+        ToastService.instance.showError('Error saving supplier: $e');
       } finally {
         if (mounted) setState(() => _isSaving = false);
       }
@@ -599,11 +525,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
     final accessToken = await _storage.read(key: 'access_token');
     if (accessToken == null || accessToken.trim().isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Login session missing. Please log in again.'),
-        ),
-      );
+      ToastService.instance.showError('Login session missing. Please log in again.');
       return;
     }
 
@@ -630,6 +552,13 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
         };
       }).toList(),
     };
+
+    if (!ConnectivityService.instance.isOnline) {
+      await SyncManager.instance.queueOperation(type: 'add_customer', payload: payload);
+      if (!mounted) return;
+      Navigator.of(context).maybePop(true);
+      return;
+    }
 
     setState(() => _isSaving = true);
     try {
@@ -661,12 +590,7 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
           await _downloadAndSaveReceiptPdf(txId);
         } else {
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Customer saved successfully.'),
-              backgroundColor: Color(0xFF247A4B),
-            ),
-          );
+          ToastService.instance.showSuccess('Customer added successfully.');
           Navigator.of(context).maybePop(true);
         }
         return;
@@ -681,23 +605,19 @@ class _NewCustomerScreenState extends State<NewCustomerScreen> {
 
       String message;
       if (response.statusCode == 401) {
-        message = 'Login session expired. Please log in again.';
+        message = 'Your session has expired. Please log in again.';
       } else if (response.statusCode == 409) {
-        message = 'Shop profile is incomplete. Please complete shop details in Shop Settings.';
+        message = 'Complete your shop details to generate the bill.';
       } else {
         message = serverMessage ??
             'Could not save customer (HTTP ${response.statusCode}).';
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
-      );
+      ToastService.instance.showError(message);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error saving customer: $e')),
-      );
+      ToastService.instance.showError('Error saving customer: $e');
     } finally {
       if (mounted) {
         setState(() {

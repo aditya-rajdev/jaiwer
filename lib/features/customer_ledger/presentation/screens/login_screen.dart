@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../../../../services/api_client.dart';
+import '../../../../services/toast_service.dart';
 import '../../../dashboard/presentation/screens/dashboard_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -142,7 +143,11 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _message(String value) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(value)));
+    if (value.toLowerCase().contains('invalid') || value.toLowerCase().contains('error') || value.toLowerCase().contains('expired')) {
+      ToastService.instance.showError(value);
+    } else {
+      ToastService.instance.showInfo(value);
+    }
   }
 
   @override
